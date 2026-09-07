@@ -120,8 +120,12 @@ lookup_prs() {
 }
 
 # For the open PRs whose rollup reports a failure: is any *required* check among
-# the failing ones? One GraphQL request for all of them. stdin: the lookup JSON.
-# stdout: the same JSON with `required_failing` set. Fails on any error.
+# the failing ones? One GraphQL request for all of them. A re-run check keeps every
+# earlier attempt in the rollup, so only the newest attempt of each check name counts,
+# the way branch protection counts it. ACTION_REQUIRED is the missing-review gate
+# rather than a broken check, and `mergeStateStatus` already reports that as BLOCKED.
+# stdin: the lookup JSON. stdout: the same JSON with `required_failing` set.
+# Fails on any error.
 mark_required_failing() {
   local prs targets query out
   prs=$(cat)
@@ -134,8 +138,8 @@ mark_required_failing() {
     "query { " + ([$t | to_entries[] |
       "p\(.key): repository(owner: \(.value.slug | split("/")[0] | tojson), name: \(.value.slug | split("/")[1] | tojson)) "
       + "{ pullRequest(number: \(.value.number)) { commits(last: 1) { nodes { commit { statusCheckRollup { contexts(first: 100) { nodes { __typename "
-      + "... on CheckRun { status conclusion isRequired(pullRequestNumber: \(.value.number)) } "
-      + "... on StatusContext { state isRequired(pullRequestNumber: \(.value.number)) } } } } } } } }"
+      + "... on CheckRun { name status conclusion startedAt completedAt isRequired(pullRequestNumber: \(.value.number)) } "
+      + "... on StatusContext { context state createdAt isRequired(pullRequestNumber: \(.value.number)) } } } } } } } } }"
     ] | join(" ")) + " }"')
   out=$(gh_graphql "$query") || return 1
   printf '%s' "$out" | jq -c --argjson t "$targets" --argjson prs "$prs" '
@@ -144,9 +148,12 @@ mark_required_failing() {
     | [$t | to_entries[] | .value + {failing: (
         [($d["p\(.key)"].pullRequest.commits.nodes[0].commit.statusCheckRollup.contexts.nodes // [])[]
          | select(.isRequired == true)
-         | select((.conclusion // "") as $c | ($c == "FAILURE" or $c == "TIMED_OUT" or $c == "CANCELLED" or $c == "ACTION_REQUIRED" or $c == "STARTUP_FAILURE")
-                  or ((.state // "") as $s | ($s == "FAILURE" or $s == "ERROR")))
-        ] | length > 0)}] as $marks
+         | {name: (.name // .context // ""),
+            at: (.completedAt // .startedAt // .createdAt // ""),
+            result: (.conclusion // .state // "")}]
+        | group_by(.name) | map(max_by(.at))
+        | map(select(.result | IN("FAILURE", "TIMED_OUT", "CANCELLED", "STARTUP_FAILURE", "ERROR")))
+        | length > 0)}] as $marks
     | $prs | map(. as $pr | . + {required_failing: ([$marks[] | select(.slug == $pr.slug and .number == $pr.number) | .failing][0] // false)})'
 }
 
