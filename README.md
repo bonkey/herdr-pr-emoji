@@ -5,7 +5,7 @@ the workspace's branch. Built to replace `mergr` for that purpose, with one spec
 behaviour: **a PR whose only failing checks are non-required reads as mergeable**, the way
 GitHub itself treats it.
 
-    ✅ bonkey/purchase-to-unlock     🟡 bonkey/ios-27-siri-ai-intents     ❌ bonkey/apple-ads-interface
+    ✅ bonkey/purchase-to-unlock     🟡 bonkey/ios-27-siri-ai-intents     🛑 bonkey/apple-ads-interface
 
 ## Install
 
@@ -43,13 +43,13 @@ The decisive field is GitHub's `mergeStateStatus`; first match wins:
 | `isDraft` | 📝 |
 | `mergeStateStatus == DIRTY` (merge conflict) | ⚠️ |
 | checks still running (`statusCheckRollup.state == PENDING`) | 🟡 |
-| `mergeStateStatus == BLOCKED` (required check failing, or review required) | ❌ |
+| `mergeStateStatus == BLOCKED` (required check failing, or review required) | 🛑 |
 | `mergeStateStatus == UNSTABLE` (**only non-required checks failing**) | ✅, or ⚠️ with `unstable = "warn"` |
 | `mergeStateStatus` in `CLEAN`, `BEHIND`, `HAS_HOOKS` | ✅ |
 | anything else (`UNKNOWN`, GitHub still computing) | (empty), next poll |
 
 Running checks are reported before `BLOCKED`: while required checks run GitHub already
-says `BLOCKED`, and a red ❌ during every CI run is exactly the noise this plugin removes.
+says `BLOCKED`, and a 🛑 during every CI run is exactly the noise this plugin removes.
 
 ## How it polls
 

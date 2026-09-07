@@ -100,7 +100,7 @@ query_repo() {
       elif .isDraft then "📝"
       elif .mergeStateStatus == "DIRTY" then "⚠️"
       elif (.commits.nodes[0].commit.statusCheckRollup.state // "") == "PENDING" then "🟡"
-      elif .mergeStateStatus == "BLOCKED" then "❌"
+      elif .mergeStateStatus == "BLOCKED" then "🛑"
       elif .mergeStateStatus == "UNSTABLE" then (if $unstable == "warn" then "⚠️" else "✅" end)
       elif .mergeStateStatus == "CLEAN" or .mergeStateStatus == "BEHIND" or .mergeStateStatus == "HAS_HOOKS" then "✅"
       else "" end;
