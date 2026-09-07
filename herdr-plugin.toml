@@ -1,0 +1,22 @@
+id = "bonkey.pr-emoji"
+name = "PR Emoji"
+version = "0.1.0"
+min_herdr_version = "0.8.2"
+description = "One emoji per sidebar row with the pull request state of the workspace's branch: 📝 draft, 🟡 CI running, ❌ blocked, ⚠️ conflict, ✅ mergeable (also when only optional checks fail), 🟣 merged."
+platforms = ["macos", "linux"]
+
+# Render it in config.toml by adding { token = "$pr_emoji" } to a row of
+# [ui.sidebar.agents] and/or [ui.sidebar.spaces].
+
+# One long-lived loop, started with the server. No per-event hooks.
+[[startup]]
+command = ["bash", "daemon.sh"]
+
+# Manual refresh outside the polling interval:
+#   herdr plugin action invoke bonkey.pr-emoji.refresh
+[[actions]]
+id = "refresh"
+title = "Refresh PR emoji"
+description = "Query GitHub now for every workspace's pull request state."
+contexts = ["workspace"]
+command = ["bash", "daemon.sh", "--once"]

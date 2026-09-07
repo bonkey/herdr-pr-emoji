@@ -1,0 +1,8 @@
+# Copy to $(herdr plugin config-dir bonkey.pr-emoji)/config.toml
+
+# Seconds between GitHub polls. Floor: 60. Default: 120.
+refreshIntervalSeconds = 120
+
+# What a PR with only non-required checks failing (GitHub mergeStateStatus UNSTABLE) shows:
+#   "pass" -> ✅ (default)   "warn" -> ⚠️
+unstable = "pass"
