@@ -1,6 +1,6 @@
 id = "bonkey.pr-emoji"
 name = "PR Emoji"
-version = "0.2.1"
+version = "0.2.2"
 min_herdr_version = "0.8.2"
 description = "One emoji per sidebar row with the pull request state of the workspace's branch: 📝 draft, ❌ required check failed, 🟡 CI running, 🛑 blocked, ⚠️ conflict, ✅ mergeable (also when only optional checks fail), 🟣 merged."
 platforms = ["macos", "linux"]

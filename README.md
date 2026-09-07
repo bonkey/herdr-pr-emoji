@@ -44,7 +44,7 @@ the failing ones; first match wins:
 | `isDraft` | 📝 |
 | `mergeStateStatus == DIRTY` (merge conflict) | ⚠️ |
 | the newest attempt of a **required** check failed (`isRequired` on a failing check run or status) | ❌ |
-| checks still running (`statusCheckRollup.state == PENDING`) | 🟡 |
+| checks still running (`statusCheckRollup.state == PENDING`, or a required check queued or in progress) | 🟡 |
 | `mergeStateStatus == BLOCKED` (review required, or otherwise not mergeable) | 🛑 |
 | `mergeStateStatus == UNSTABLE` (**only non-required checks failing**) | ✅, or ⚠️ with `unstable = "warn"` |
 | `mergeStateStatus` in `CLEAN`, `BEHIND`, `HAS_HOOKS` | ✅ |
@@ -56,6 +56,11 @@ says `BLOCKED`, and a 🛑 during every CI run is exactly the noise this plugin 
 A re-run check keeps its earlier attempts in the rollup, so only the newest attempt of each
 check name decides ❌, the way branch protection decides it. A missing review arrives as a
 required check run with the `ACTION_REQUIRED` conclusion; that is the 🛑 case, not ❌.
+
+`statusCheckRollup.state` alone cannot report running checks: GitHub turns the whole rollup
+to `FAILURE` as soon as one context fails, however many are still queued, and one failing
+optional check is enough. So 🟡 also comes from the individual required checks, which the
+same request already carries.
 
 ## How it polls
 

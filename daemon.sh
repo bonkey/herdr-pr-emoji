@@ -119,19 +119,21 @@ lookup_prs() {
               rollup: ($pr.commits.nodes[0].commit.statusCheckRollup.state // "")} end)]'
 }
 
-# For the open PRs whose rollup reports a failure: is any *required* check among
-# the failing ones? One GraphQL request for all of them. A re-run check keeps every
-# earlier attempt in the rollup, so only the newest attempt of each check name counts,
-# the way branch protection counts it. ACTION_REQUIRED is the missing-review gate
-# rather than a broken check, and `mergeStateStatus` already reports that as BLOCKED.
-# stdin: the lookup JSON. stdout: the same JSON with `required_failing` set.
-# Fails on any error.
-mark_required_failing() {
+# For the open PRs whose rollup reports a failure: of their *required* checks, is any
+# failing, and is any still running? One GraphQL request for all of them. A re-run check
+# keeps every earlier attempt in the rollup, so only the newest attempt of each check
+# name counts, the way branch protection counts it. ACTION_REQUIRED is the
+# missing-review gate rather than a broken check, and `mergeStateStatus` already
+# reports that as BLOCKED. `statusCheckRollup.state` cannot answer the running
+# question here: GitHub reports FAILURE for the whole rollup as soon as one context
+# fails, however many are still queued. stdin: the lookup JSON. stdout: the same JSON
+# with `required_failing` and `required_running` set. Fails on any error.
+mark_required_state() {
   local prs targets query out
   prs=$(cat)
   targets=$(printf '%s' "$prs" | jq -c '[.[] | select(.state == "OPEN" and (.rollup == "FAILURE" or .rollup == "ERROR")) | {slug, number}] | unique')
   if [ "$targets" = "[]" ]; then
-    printf '%s' "$prs" | jq -c 'map(. + {required_failing: false})'
+    printf '%s' "$prs" | jq -c 'map(. + {required_failing: false, required_running: false})'
     return 0
   fi
   query=$(jq -rn --argjson t "$targets" '
@@ -145,16 +147,20 @@ mark_required_failing() {
   printf '%s' "$out" | jq -c --argjson t "$targets" --argjson prs "$prs" '
     if .data == null then error("no data") else . end
     | .data as $d
-    | [$t | to_entries[] | .value + {failing: (
-        [($d["p\(.key)"].pullRequest.commits.nodes[0].commit.statusCheckRollup.contexts.nodes // [])[]
-         | select(.isRequired == true)
-         | {name: (.name // .context // ""),
-            at: (.completedAt // .startedAt // .createdAt // ""),
-            result: (.conclusion // .state // "")}]
-        | group_by(.name) | map(max_by(.at))
-        | map(select(.result | IN("FAILURE", "TIMED_OUT", "CANCELLED", "STARTUP_FAILURE", "ERROR")))
-        | length > 0)}] as $marks
-    | $prs | map(. as $pr | . + {required_failing: ([$marks[] | select(.slug == $pr.slug and .number == $pr.number) | .failing][0] // false)})'
+    | [$t | to_entries[]
+       | ([($d["p\(.key)"].pullRequest.commits.nodes[0].commit.statusCheckRollup.contexts.nodes // [])[]
+           | select(.isRequired == true)
+           | {name: (.name // .context // ""),
+              at: (.completedAt // .startedAt // .createdAt // ""),
+              result: (.conclusion // .state // ""),
+              status: (.status // "")}]
+          | group_by(.name) | map(max_by(.at))) as $latest
+       | .value + {
+           failing: ([$latest[] | select(.result | IN("FAILURE", "TIMED_OUT", "CANCELLED", "STARTUP_FAILURE", "ERROR"))] | length > 0),
+           running: ([$latest[] | select((.status | IN("QUEUED", "IN_PROGRESS", "WAITING", "REQUESTED")) or .result == "PENDING")] | length > 0)}] as $marks
+    | $prs | map(. as $pr
+        | ([$marks[] | select(.slug == $pr.slug and .number == $pr.number)][0]) as $m
+        | . + {required_failing: ($m.failing // false), required_running: ($m.running // false)})'
 }
 
 # Lookup JSON on stdin, "slug<TAB>branch<TAB>emoji" on stdout. First match wins.
@@ -167,7 +173,7 @@ map_emoji() {
       elif .isDraft then "📝"
       elif .mergeStateStatus == "DIRTY" then "⚠️"
       elif .required_failing then "❌"
-      elif .rollup == "PENDING" then "🟡"
+      elif .rollup == "PENDING" or .required_running then "🟡"
       elif .mergeStateStatus == "BLOCKED" then "🛑"
       elif .mergeStateStatus == "UNSTABLE" then (if $unstable == "warn" then "⚠️" else "✅" end)
       elif .mergeStateStatus == "CLEAN" or .mergeStateStatus == "BEHIND" or .mergeStateStatus == "HAS_HOOKS" then "✅"
@@ -177,15 +183,15 @@ map_emoji() {
 
 # "slug<TAB>branch" lines in, "slug<TAB>branch<TAB>emoji" lines out.
 # A failed lookup fails the whole resolve; a failed required-check query only
-# loses the ❌/🛑 distinction for this cycle.
+# loses the ❌ and 🟡 verdicts for this cycle, leaving those PRs on 🛑.
 resolve() {
   local prs marked
   prs=$(lookup_prs) || return 1
-  if marked=$(printf '%s' "$prs" | mark_required_failing); then
+  if marked=$(printf '%s' "$prs" | mark_required_state); then
     prs=$marked
   else
-    log "required-check query failed, BLOCKED shows 🛑 this cycle"
-    prs=$(printf '%s' "$prs" | jq -c 'map(. + {required_failing: false})')
+    log "required-check query failed, ❌ and 🟡 fall back to 🛑 this cycle"
+    prs=$(printf '%s' "$prs" | jq -c 'map(. + {required_failing: false, required_running: false})')
   fi
   printf '%s' "$prs" | map_emoji
 }
