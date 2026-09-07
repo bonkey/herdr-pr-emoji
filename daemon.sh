@@ -1,12 +1,14 @@
 #!/usr/bin/env bash
 # One long-lived loop: every cycle, resolve each workspace's branch locally,
-# ask GitHub once per repository for the newest pull request of each branch,
-# and publish one emoji as the `pr_emoji` token on the workspace (Space rows)
+# ask GitHub in one request for the newest pull request of every branch (plus
+# one for the required checks of PRs with failures), and publish one emoji as the `pr_emoji` token on the workspace (Space rows)
 # and on each of its panes (Agent rows).
 #
 #   bash daemon.sh                      loop; started by herdr as a [[startup]] hook
 #   bash daemon.sh --once               one cycle, then exit (manual refresh, development)
 #   bash daemon.sh --query owner/name   branches on stdin, "branch<TAB>emoji" on stdout
+#   bash daemon.sh --resolve            "owner/name<TAB>branch" on stdin, "…<TAB>emoji" on stdout
+#   bash daemon.sh --map                lookup JSON on stdin, "slug<TAB>branch<TAB>emoji" out
 #
 # Never calls the herdr API method `worktree.list`: herdr answers it by
 # enumerating git worktrees on its main thread. `workspace list` and
@@ -79,34 +81,106 @@ github_slug() {
   case $url in */*/*) return 0 ;; */*) printf '%s\n' "$url" ;; esac
 }
 
-# One GraphQL request: the newest pull request of every branch of one repository.
-# stdin: branch names, one per line. stdout: TSV "branch<TAB>emoji". Fails on any error.
-query_repo() {
-  local slug=$1 owner=${1%%/*} name=${1#*/} branches query out
-  branches=$(jq -R . | jq -s .)
-  query=$(jq -rn --arg owner "$owner" --arg name "$name" --argjson b "$branches" '
-    "query { repository(owner: \($owner|tojson), name: \($name|tojson)) { "
-    + ([$b | to_entries[] |
-        "b\(.key): pullRequests(headRefName: \(.value|tojson), last: 1, orderBy: {field: CREATED_AT, direction: ASC}) "
-        + "{ nodes { isDraft state mergeStateStatus commits(last: 1) { nodes { commit { statusCheckRollup { state } } } } } }"
-      ] | join(" "))
-    + " } }"')
-  out=$(run_timeout "$GH_TIMEOUT" gh api graphql -f query="$query" 2>/dev/null) || return 1
-  printf '%s' "$out" | jq -r --argjson b "$branches" --arg unstable "$UNSTABLE" '
+# `gh api graphql` exits 1 when the response carries `errors`, even with partial
+# data (a repository the token cannot see). Keep whatever came back; the
+# callers treat missing aliases as "no pull request".
+gh_graphql() {
+  local out
+  out=$(run_timeout "$GH_TIMEOUT" gh api graphql -f query="$1" 2>/dev/null)
+  printf '%s' "$out" | jq -e '.data != null' >/dev/null 2>&1 || return 1
+  printf '%s' "$out"
+}
+
+# Newest pull request of every branch, all repositories in one GraphQL request.
+# stdin: "owner/name<TAB>branch" lines. stdout: JSON array of
+# {slug, branch, number, isDraft, state, mergeStateStatus, rollup}. Fails on any error.
+lookup_prs() {
+  local pairs query out
+  pairs=$(jq -Rn '[inputs | split("\t") | {slug: .[0], branch: .[1]}] | unique')
+  query=$(jq -rn --argjson p "$pairs" '
+    ($p | group_by(.slug) | to_entries | map(
+      .key as $ri | .value[0].slug as $slug |
+      "r\($ri): repository(owner: \($slug | split("/")[0] | tojson), name: \($slug | split("/")[1] | tojson)) { "
+      + ([.value | to_entries[] |
+          "b\(.key): pullRequests(headRefName: \(.value.branch | tojson), last: 1, orderBy: {field: CREATED_AT, direction: ASC}) "
+          + "{ nodes { number isDraft state mergeStateStatus commits(last: 1) { nodes { commit { statusCheckRollup { state } } } } } }"
+        ] | join(" "))
+      + " }") | join(" ")) as $body
+    | "query { \($body) }"')
+  out=$(gh_graphql "$query") || return 1
+  printf '%s' "$out" | jq -c --argjson p "$pairs" '
+    if .data == null then error("no data") else . end
+    | .data as $d
+    | [$p | group_by(.slug) | to_entries[] | .key as $ri | .value | to_entries[]
+       | .value as $pair | ($d["r\($ri)"] // {})["b\(.key)"].nodes[0] as $pr
+       | {slug: $pair.slug, branch: $pair.branch}
+         + (if $pr == null then {} else
+             {number: $pr.number, isDraft: $pr.isDraft, state: $pr.state, mergeStateStatus: $pr.mergeStateStatus,
+              rollup: ($pr.commits.nodes[0].commit.statusCheckRollup.state // "")} end)]'
+}
+
+# For the open PRs whose rollup reports a failure: is any *required* check among
+# the failing ones? One GraphQL request for all of them. stdin: the lookup JSON.
+# stdout: the same JSON with `required_failing` set. Fails on any error.
+mark_required_failing() {
+  local prs targets query out
+  prs=$(cat)
+  targets=$(printf '%s' "$prs" | jq -c '[.[] | select(.state == "OPEN" and (.rollup == "FAILURE" or .rollup == "ERROR")) | {slug, number}] | unique')
+  if [ "$targets" = "[]" ]; then
+    printf '%s' "$prs" | jq -c 'map(. + {required_failing: false})'
+    return 0
+  fi
+  query=$(jq -rn --argjson t "$targets" '
+    "query { " + ([$t | to_entries[] |
+      "p\(.key): repository(owner: \(.value.slug | split("/")[0] | tojson), name: \(.value.slug | split("/")[1] | tojson)) "
+      + "{ pullRequest(number: \(.value.number)) { commits(last: 1) { nodes { commit { statusCheckRollup { contexts(first: 100) { nodes { __typename "
+      + "... on CheckRun { status conclusion isRequired(pullRequestNumber: \(.value.number)) } "
+      + "... on StatusContext { state isRequired(pullRequestNumber: \(.value.number)) } } } } } } } }"
+    ] | join(" ")) + " }"')
+  out=$(gh_graphql "$query") || return 1
+  printf '%s' "$out" | jq -c --argjson t "$targets" --argjson prs "$prs" '
+    if .data == null then error("no data") else . end
+    | .data as $d
+    | [$t | to_entries[] | .value + {failing: (
+        [($d["p\(.key)"].pullRequest.commits.nodes[0].commit.statusCheckRollup.contexts.nodes // [])[]
+         | select(.isRequired == true)
+         | select((.conclusion // "") as $c | ($c == "FAILURE" or $c == "TIMED_OUT" or $c == "CANCELLED" or $c == "ACTION_REQUIRED" or $c == "STARTUP_FAILURE")
+                  or ((.state // "") as $s | ($s == "FAILURE" or $s == "ERROR")))
+        ] | length > 0)}] as $marks
+    | $prs | map(. as $pr | . + {required_failing: ([$marks[] | select(.slug == $pr.slug and .number == $pr.number) | .failing][0] // false)})'
+}
+
+# Lookup JSON on stdin, "slug<TAB>branch<TAB>emoji" on stdout. First match wins.
+map_emoji() {
+  jq -r --arg unstable "$UNSTABLE" '
     def emoji:
-      if . == null then ""
+      if .number == null then ""
       elif .state == "MERGED" then "🟣"
       elif .state == "CLOSED" then ""
       elif .isDraft then "📝"
       elif .mergeStateStatus == "DIRTY" then "⚠️"
-      elif (.commits.nodes[0].commit.statusCheckRollup.state // "") == "PENDING" then "🟡"
+      elif .required_failing then "❌"
+      elif .rollup == "PENDING" then "🟡"
       elif .mergeStateStatus == "BLOCKED" then "🛑"
       elif .mergeStateStatus == "UNSTABLE" then (if $unstable == "warn" then "⚠️" else "✅" end)
       elif .mergeStateStatus == "CLEAN" or .mergeStateStatus == "BEHIND" or .mergeStateStatus == "HAS_HOOKS" then "✅"
       else "" end;
-    if .data.repository == null then error("repository not found") else . end
-    | .data.repository as $r
-    | $b | to_entries[] | "\(.value)\t\($r["b\(.key)"].nodes[0] | emoji)"'
+    .[] | "\(.slug)\t\(.branch)\t\(emoji)"'
+}
+
+# "slug<TAB>branch" lines in, "slug<TAB>branch<TAB>emoji" lines out.
+# A failed lookup fails the whole resolve; a failed required-check query only
+# loses the ❌/🛑 distinction for this cycle.
+resolve() {
+  local prs marked
+  prs=$(lookup_prs) || return 1
+  if marked=$(printf '%s' "$prs" | mark_required_failing); then
+    prs=$marked
+  else
+    log "required-check query failed, BLOCKED shows 🛑 this cycle"
+    prs=$(printf '%s' "$prs" | jq -c 'map(. + {required_failing: false})')
+  fi
+  printf '%s' "$prs" | map_emoji
 }
 
 # publish KIND ID EMOJI
@@ -121,7 +195,7 @@ publish() {
 
 # One cycle. Returns 1 only when herdr itself is unreachable.
 cycle() {
-  local workspaces panes rows ws dir branch slug repos results line emoji pane
+  local workspaces panes rows ws dir branch slug results emoji pane
   workspaces=$(run_timeout "$HERDR_TIMEOUT" "$HERDR" workspace list 2>/dev/null) || return 1
   panes=$(run_timeout "$HERDR_TIMEOUT" "$HERDR" pane list 2>/dev/null) || return 1
 
@@ -133,7 +207,6 @@ cycle() {
 
   # ws<TAB>slug<TAB>branch, resolved locally.
   results=""
-  repos=""
   while IFS=$'\t' read -r ws dir; do
     [ -n "$ws" ] || continue
     slug=""
@@ -144,20 +217,17 @@ cycle() {
     fi
     results="$results$ws	$slug	$branch
 "
-    [ -n "$slug" ] && repos="$repos$slug
-"
   done <<<"$rows"
 
-  # One GitHub call per repository; a failure clears its workspaces.
-  local lookups=""
-  for slug in $(printf '%s' "$repos" | sort -u); do
-    line=$(printf '%s' "$results" | awk -F'\t' -v s="$slug" '$2 == s && $3 != "" { print $3 }' | sort -u | query_repo "$slug") || {
-      log "$slug: GitHub query failed, clearing its workspaces"
-      continue
+  # Two GitHub calls for everything; a failure clears every workspace.
+  local lookups
+  lookups=$(printf '%s' "$results" | awk -F'\t' '$2 != "" && $3 != "" { print $2 "\t" $3 }' | sort -u)
+  if [ -n "$lookups" ]; then
+    lookups=$(printf '%s\n' "$lookups" | resolve) || {
+      log "GitHub lookup failed, clearing every workspace"
+      lookups=""
     }
-    lookups="$lookups$(printf '%s\n' "$line" | sed "s#^#$slug	#")
-"
-  done
+  fi
 
   while IFS=$'\t' read -r ws slug branch; do
     [ -n "$ws" ] || continue
@@ -185,7 +255,15 @@ main() {
   fi
 
   if [ "${1:-}" = "--query" ]; then
-    query_repo "${2:?usage: daemon.sh --query owner/name}"
+    sed "s#^#${2:?usage: daemon.sh --query owner/name}	#" | resolve | cut -f2-
+    return $?
+  fi
+  if [ "${1:-}" = "--resolve" ]; then
+    resolve
+    return $?
+  fi
+  if [ "${1:-}" = "--map" ]; then
+    map_emoji
     return $?
   fi
   if [ "$once" = 1 ]; then

@@ -34,7 +34,8 @@ so after installing either restart herdr or run it once by hand:
 
 ## State mapping
 
-The decisive field is GitHub's `mergeStateStatus`; first match wins:
+The decisive field is GitHub's `mergeStateStatus`, plus whether a *required* check is among
+the failing ones; first match wins:
 
 | Condition | Emoji |
 |---|---|
@@ -42,8 +43,9 @@ The decisive field is GitHub's `mergeStateStatus`; first match wins:
 | `state == MERGED` | 🟣 |
 | `isDraft` | 📝 |
 | `mergeStateStatus == DIRTY` (merge conflict) | ⚠️ |
+| a **required** check failed (`isRequired` on a failing check run or status) | ❌ |
 | checks still running (`statusCheckRollup.state == PENDING`) | 🟡 |
-| `mergeStateStatus == BLOCKED` (required check failing, or review required) | 🛑 |
+| `mergeStateStatus == BLOCKED` (review required, or otherwise not mergeable) | 🛑 |
 | `mergeStateStatus == UNSTABLE` (**only non-required checks failing**) | ✅, or ⚠️ with `unstable = "warn"` |
 | `mergeStateStatus` in `CLEAN`, `BEHIND`, `HAS_HOOKS` | ✅ |
 | anything else (`UNKNOWN`, GitHub still computing) | (empty), next poll |
@@ -59,13 +61,18 @@ One long-lived loop, started with the server. Each cycle:
    herdr API method `worktree.list` is never called: herdr answers it by enumerating git
    worktrees synchronously on its main thread, which is what made `mergr` stall the server.
 2. For each workspace, `git branch --show-current` and the `origin` URL, locally.
-3. **One GraphQL request per GitHub repository**, aliasing every branch of that repository
-   (`pullRequests(headRefName:, last: 1)`), so the answer is exact even for merged branches.
+3. **One GraphQL request for every repository and branch at once**
+   (`pullRequests(headRefName:, last: 1)` aliased per branch), so the answer is exact even
+   for merged branches. A second request, only for open PRs whose checks report a failure,
+   asks each check `isRequired(pullRequestNumber:)` to tell ❌ from 🛑. Two calls per cycle,
+   however many repositories are open.
 4. `report-metadata` on the workspace and each of its panes, with a TTL of three
    intervals: if the daemon dies, the emoji disappears instead of going stale.
 
-Every subprocess (`herdr`, `git`, `gh`) has a timeout. A failed GitHub query clears the
-tokens of that repository's workspaces rather than showing a misleading emoji. Three
+Every subprocess (`herdr`, `git`, `gh`) has a timeout. A repository the token cannot see
+(a SAML-protected organisation the token is not authorised for, a private repository) simply
+shows nothing; a failed lookup clears every workspace rather than showing a misleading
+emoji; a failed required-check query only loses the ❌/🛑 distinction for that cycle. Three
 consecutive herdr failures mean the server is gone and the loop exits. If the daemon finds
 another instance in its pid file it stops it first, so a hand-launched copy never polls in
 parallel with the one the server starts.
@@ -91,6 +98,8 @@ development launch the loop by hand and check what it publishes with `herdr api 
 
     bash daemon.sh --once                                   # one cycle against the running herdr
     printf 'main\nfeature/x\n' | bash daemon.sh --query owner/name   # branch<TAB>emoji, no herdr needed
+    printf 'o/r\tmain\no2/r2\tfix\n' | bash daemon.sh --resolve    # several repositories at once
+    bash daemon.sh --map < lookup.json                      # mapping only, for synthetic states
 
 ## Non-goals
 
