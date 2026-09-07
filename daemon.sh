@@ -271,21 +271,31 @@ main() {
     return 0
   fi
 
+  # herdr captures the startup hook's output until it exits; log to a file instead.
+  [ -f "$LOG" ] && [ "$(wc -c <"$LOG")" -gt 1000000 ] && : >"$LOG"
+  exec >>"$LOG" 2>&1
+
   # Single instance: a daemon launched by hand survives a server restart, so
-  # replace whatever holds the pidfile.
+  # replace whatever holds the pidfile, waiting for it to actually go away.
   if [ -f "$PIDFILE" ]; then
     old=$(cat "$PIDFILE" 2>/dev/null)
     if [ -n "$old" ] && [ "$old" != "$$" ] && kill -0 "$old" 2>/dev/null; then
       log "stopping previous daemon $old"
       kill "$old" 2>/dev/null
+      for _ in 1 2 3 4 5 6 7 8 9 10; do
+        kill -0 "$old" 2>/dev/null || break
+        sleep 0.5
+      done
+      if kill -0 "$old" 2>/dev/null; then
+        log "previous daemon $old ignored TERM, killing it"
+        kill -9 "$old" 2>/dev/null
+        sleep 0.5
+      fi
     fi
   fi
   printf '%s\n' "$$" >"$PIDFILE"
-  trap 'rm -f "$PIDFILE"; exit 0' TERM INT
-
-  # herdr captures the startup hook's output until it exits; log to a file instead.
-  [ -f "$LOG" ] && [ "$(wc -c <"$LOG")" -gt 1000000 ] && : >"$LOG"
-  exec >>"$LOG" 2>&1
+  # Remove the pidfile only while it is still ours: a successor may already own it.
+  trap '[ "$(cat "$PIDFILE" 2>/dev/null)" = "$$" ] && rm -f "$PIDFILE"; exit 0' TERM INT
   log "started pid $$, interval ${INTERVAL}s, unstable=$UNSTABLE"
 
   while :; do
