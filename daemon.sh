@@ -122,7 +122,9 @@ lookup_prs() {
 # For the open PRs whose rollup reports a failure: of their *required* checks, is any
 # failing, and is any still running? One GraphQL request for all of them. A re-run check
 # keeps every earlier attempt in the rollup, so only the newest attempt of each check
-# name counts, the way branch protection counts it. ACTION_REQUIRED is the
+# name counts, the way branch protection counts it, and an attempt still in flight is
+# the newest whatever its timestamp says: a queued run can report a `startedAt` days
+# old. ACTION_REQUIRED is the
 # missing-review gate rather than a broken check, and `mergeStateStatus` already
 # reports that as BLOCKED. `statusCheckRollup.state` cannot answer the running
 # question here: GitHub reports FAILURE for the whole rollup as soon as one context
@@ -153,11 +155,11 @@ mark_required_state() {
            | {name: (.name // .context // ""),
               at: (.completedAt // .startedAt // .createdAt // ""),
               result: (.conclusion // .state // ""),
-              status: (.status // "")}]
-          | group_by(.name) | map(max_by(.at))) as $latest
+              running: ((.status | IN("QUEUED", "IN_PROGRESS", "WAITING", "REQUESTED")) or (.state // "") == "PENDING")}]
+          | group_by(.name) | map(max_by([.running, .at]))) as $latest
        | .value + {
            failing: ([$latest[] | select(.result | IN("FAILURE", "TIMED_OUT", "CANCELLED", "STARTUP_FAILURE", "ERROR"))] | length > 0),
-           running: ([$latest[] | select((.status | IN("QUEUED", "IN_PROGRESS", "WAITING", "REQUESTED")) or .result == "PENDING")] | length > 0)}] as $marks
+           running: ([$latest[] | select(.running)] | length > 0)}] as $marks
     | $prs | map(. as $pr
         | ([$marks[] | select(.slug == $pr.slug and .number == $pr.number)][0]) as $m
         | . + {required_failing: ($m.failing // false), required_running: ($m.running // false)})'
