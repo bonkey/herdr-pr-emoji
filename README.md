@@ -11,7 +11,8 @@ GitHub itself treats it.
 
     herdr plugin install bonkey/herdr-pr-emoji
 
-Requires herdr ≥ 0.8.2, bash, git, `jq` and an authenticated `gh`. No build step.
+Requires herdr ≥ 0.8.2, Python 3.9 or newer (standard library only), git and an
+authenticated `gh`. No build step.
 
 Then render the token in `config.toml` — the plugin only reports a value:
 
@@ -78,13 +79,21 @@ One long-lived loop, started with the server. Each cycle:
 4. `report-metadata` on the workspace and each of its panes, with a TTL of three
    intervals: if the daemon dies, the emoji disappears instead of going stale.
 
-Every subprocess (`herdr`, `git`, `gh`) has a timeout. A repository the token cannot see
-(a SAML-protected organisation the token is not authorised for, a private repository) simply
-shows nothing; a failed lookup clears every workspace rather than showing a misleading
-emoji; a failed required-check query only loses the ❌/🛑 distinction for that cycle. Three
-consecutive herdr failures mean the server is gone and the loop exits. If the daemon finds
-another instance in its pid file it stops it first, so a hand-launched copy never polls in
-parallel with the one the server starts.
+Every subprocess (`herdr`, `git`, `gh`) has a timeout.
+
+Failures are contained per branch. `gh api graphql` exits 1 whenever the response carries an
+`errors` array, even when it also carries usable data, so the exit code alone decides
+nothing: every repository and branch the answer does cover is used, and the error text lands
+in the log with its path. A branch GitHub did not answer for keeps the emoji it already
+shows — the token carries a TTL of three intervals, so an emoji nobody refreshes disappears
+on its own, and one failed request no longer blanks every workspace. A pull request whose
+required checks went unanswered loses only its ❌ and 🟡 verdicts and stays on 🛑. A
+repository the token cannot see (a SAML-protected organisation the token is not authorised
+for, a private repository) shows nothing.
+
+Three consecutive herdr failures mean the server is gone and the loop exits. If the daemon
+finds another instance in its pid file it stops it first, so a hand-launched copy never
+polls in parallel with the one the server starts.
 
 ## Configuration
 
@@ -105,10 +114,14 @@ Logs: `daemon.log` under `$(herdr plugin state-dir)`, i.e.
 `herdr server reload-config` and plugin disable/enable do not run startup hooks, so during
 development launch the loop by hand and check what it publishes with `herdr api snapshot`:
 
-    bash daemon.sh --once                                   # one cycle against the running herdr
-    printf 'main\nfeature/x\n' | bash daemon.sh --query owner/name   # branch<TAB>emoji, no herdr needed
-    printf 'o/r\tmain\no2/r2\tfix\n' | bash daemon.sh --resolve    # several repositories at once
-    bash daemon.sh --map < lookup.json                      # mapping only, for synthetic states
+    python3 daemon.py --once                                # one cycle against the running herdr
+    printf 'main\nfeature/x\n' | python3 daemon.py --query owner/name   # branch<TAB>emoji, no herdr needed
+    printf 'o/r\tmain\no2/r2\tfix\n' | python3 daemon.py --resolve    # several repositories at once
+
+The emoji decisions, the two GraphQL queries and the publishing plan are pure functions with
+tests over GraphQL responses recorded from real pull requests, under `fixtures/`:
+
+    python3 -m unittest
 
 ## Non-goals
 

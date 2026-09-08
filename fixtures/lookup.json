@@ -1,0 +1,221 @@
+{
+  "data": {
+    "r0": {
+      "b0": {
+        "nodes": [
+          {
+            "number": 101,
+            "isDraft": false,
+            "state": "OPEN",
+            "mergeStateStatus": "CLEAN",
+            "commits": {
+              "nodes": [
+                {
+                  "commit": {
+                    "statusCheckRollup": {
+                      "state": "SUCCESS"
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        ]
+      },
+      "b1": {
+        "nodes": [
+          {
+            "number": 102,
+            "isDraft": false,
+            "state": "OPEN",
+            "mergeStateStatus": "CLEAN",
+            "commits": {
+              "nodes": [
+                {
+                  "commit": {
+                    "statusCheckRollup": {
+                      "state": "SUCCESS"
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        ]
+      },
+      "b2": {
+        "nodes": [
+          {
+            "number": 104,
+            "isDraft": false,
+            "state": "OPEN",
+            "mergeStateStatus": "BLOCKED",
+            "commits": {
+              "nodes": [
+                {
+                  "commit": {
+                    "statusCheckRollup": {
+                      "state": "FAILURE"
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        ]
+      },
+      "b3": {
+        "nodes": [
+          {
+            "number": 103,
+            "isDraft": false,
+            "state": "OPEN",
+            "mergeStateStatus": "UNSTABLE",
+            "commits": {
+              "nodes": [
+                {
+                  "commit": {
+                    "statusCheckRollup": {
+                      "state": "FAILURE"
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        ]
+      },
+      "b4": {
+        "nodes": [
+          {
+            "number": 105,
+            "isDraft": false,
+            "state": "CLOSED",
+            "mergeStateStatus": "DIRTY",
+            "commits": {
+              "nodes": [
+                {
+                  "commit": {
+                    "statusCheckRollup": {
+                      "state": "FAILURE"
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        ]
+      }
+    },
+    "r1": {
+      "b0": {
+        "nodes": [
+          {
+            "number": 201,
+            "isDraft": false,
+            "state": "OPEN",
+            "mergeStateStatus": "CLEAN",
+            "commits": {
+              "nodes": [
+                {
+                  "commit": {
+                    "statusCheckRollup": {
+                      "state": "SUCCESS"
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        ]
+      },
+      "b1": {
+        "nodes": [
+          {
+            "number": 202,
+            "isDraft": false,
+            "state": "OPEN",
+            "mergeStateStatus": "CLEAN",
+            "commits": {
+              "nodes": [
+                {
+                  "commit": {
+                    "statusCheckRollup": {
+                      "state": "SUCCESS"
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        ]
+      },
+      "b2": {
+        "nodes": [
+          {
+            "number": 203,
+            "isDraft": false,
+            "state": "OPEN",
+            "mergeStateStatus": "CLEAN",
+            "commits": {
+              "nodes": [
+                {
+                  "commit": {
+                    "statusCheckRollup": {
+                      "state": "SUCCESS"
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        ]
+      },
+      "b3": {
+        "nodes": [
+          {
+            "number": 204,
+            "isDraft": false,
+            "state": "OPEN",
+            "mergeStateStatus": "BLOCKED",
+            "commits": {
+              "nodes": [
+                {
+                  "commit": {
+                    "statusCheckRollup": {
+                      "state": "FAILURE"
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        ]
+      },
+      "b4": {
+        "nodes": [
+          {
+            "number": 205,
+            "isDraft": false,
+            "state": "CLOSED",
+            "mergeStateStatus": "DIRTY",
+            "commits": {
+              "nodes": [
+                {
+                  "commit": {
+                    "statusCheckRollup": {
+                      "state": "FAILURE"
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        ]
+      },
+      "b5": {
+        "nodes": []
+      }
+    }
+  }
+}

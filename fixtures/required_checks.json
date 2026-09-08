@@ -1,0 +1,216 @@
+{
+  "data": {
+    "p0": {
+      "pullRequest": {
+        "commits": {
+          "nodes": [
+            {
+              "commit": {
+                "statusCheckRollup": {
+                  "contexts": {
+                    "nodes": [
+                      {
+                        "__typename": "CheckRun",
+                        "name": "build / build",
+                        "status": "COMPLETED",
+                        "conclusion": "CANCELLED",
+                        "startedAt": "2026-09-08T14:41:13Z",
+                        "completedAt": "2026-09-08T14:41:58Z",
+                        "isRequired": false
+                      },
+                      {
+                        "__typename": "CheckRun",
+                        "name": "build / build",
+                        "status": "COMPLETED",
+                        "conclusion": "SUCCESS",
+                        "startedAt": "2026-09-07T16:07:57Z",
+                        "completedAt": "2026-09-07T16:08:32Z",
+                        "isRequired": false
+                      },
+                      {
+                        "__typename": "CheckRun",
+                        "name": "lint",
+                        "status": "COMPLETED",
+                        "conclusion": "SUCCESS",
+                        "startedAt": "2026-09-07T16:07:45Z",
+                        "completedAt": "2026-09-07T16:08:12Z",
+                        "isRequired": true
+                      },
+                      {
+                        "__typename": "CheckRun",
+                        "name": "unit-tests",
+                        "status": "COMPLETED",
+                        "conclusion": "SUCCESS",
+                        "startedAt": "2026-09-07T16:25:19Z",
+                        "completedAt": "2026-09-07T16:25:23Z",
+                        "isRequired": true
+                      },
+                      {
+                        "__typename": "CheckRun",
+                        "name": "review",
+                        "status": "COMPLETED",
+                        "conclusion": "SUCCESS",
+                        "startedAt": "2026-09-08T14:42:51Z",
+                        "completedAt": "2026-09-08T14:42:55Z",
+                        "isRequired": true
+                      }
+                    ]
+                  }
+                }
+              }
+            }
+          ]
+        }
+      }
+    },
+    "p1": {
+      "pullRequest": {
+        "commits": {
+          "nodes": [
+            {
+              "commit": {
+                "statusCheckRollup": {
+                  "contexts": {
+                    "nodes": [
+                      {
+                        "__typename": "CheckRun",
+                        "name": "build / build",
+                        "status": "COMPLETED",
+                        "conclusion": "CANCELLED",
+                        "startedAt": "2026-09-07T16:24:28Z",
+                        "completedAt": "2026-09-07T16:24:36Z",
+                        "isRequired": false
+                      },
+                      {
+                        "__typename": "CheckRun",
+                        "name": "build / build",
+                        "status": "COMPLETED",
+                        "conclusion": "SUCCESS",
+                        "startedAt": "2026-09-07T16:24:37Z",
+                        "completedAt": "2026-09-07T16:25:13Z",
+                        "isRequired": false
+                      },
+                      {
+                        "__typename": "CheckRun",
+                        "name": "lint",
+                        "status": "COMPLETED",
+                        "conclusion": "SUCCESS",
+                        "startedAt": "2026-09-07T16:24:28Z",
+                        "completedAt": "2026-09-07T16:24:57Z",
+                        "isRequired": true
+                      },
+                      {
+                        "__typename": "CheckRun",
+                        "name": "unit-tests",
+                        "status": "COMPLETED",
+                        "conclusion": "SUCCESS",
+                        "startedAt": "2026-09-07T16:43:36Z",
+                        "completedAt": "2026-09-07T16:43:38Z",
+                        "isRequired": true
+                      },
+                      {
+                        "__typename": "CheckRun",
+                        "name": "review",
+                        "status": "COMPLETED",
+                        "conclusion": "ACTION_REQUIRED",
+                        "startedAt": "2026-09-08T12:06:38Z",
+                        "completedAt": "2026-09-08T12:06:42Z",
+                        "isRequired": true
+                      }
+                    ]
+                  }
+                }
+              }
+            }
+          ]
+        }
+      }
+    },
+    "p2": {
+      "pullRequest": {
+        "commits": {
+          "nodes": [
+            {
+              "commit": {
+                "statusCheckRollup": {
+                  "contexts": {
+                    "nodes": [
+                      {
+                        "__typename": "CheckRun",
+                        "name": "build / build",
+                        "status": "COMPLETED",
+                        "conclusion": "CANCELLED",
+                        "startedAt": "2026-09-08T09:49:25Z",
+                        "completedAt": "2026-09-08T09:49:26Z",
+                        "isRequired": true
+                      },
+                      {
+                        "__typename": "CheckRun",
+                        "name": "build / build",
+                        "status": "COMPLETED",
+                        "conclusion": "SUCCESS",
+                        "startedAt": "2026-09-08T09:48:59Z",
+                        "completedAt": "2026-09-08T09:49:25Z",
+                        "isRequired": true
+                      },
+                      {
+                        "__typename": "CheckRun",
+                        "name": "build / build",
+                        "status": "COMPLETED",
+                        "conclusion": "SUCCESS",
+                        "startedAt": "2026-09-07T18:23:18Z",
+                        "completedAt": "2026-09-07T18:23:38Z",
+                        "isRequired": true
+                      },
+                      {
+                        "__typename": "CheckRun",
+                        "name": "build / build",
+                        "status": "COMPLETED",
+                        "conclusion": "SUCCESS",
+                        "startedAt": "2026-09-08T09:49:28Z",
+                        "completedAt": "2026-09-08T09:49:53Z",
+                        "isRequired": true
+                      },
+                      {
+                        "__typename": "CheckRun",
+                        "name": "optional-4",
+                        "status": "COMPLETED",
+                        "conclusion": "SUCCESS",
+                        "startedAt": "2026-09-07T18:23:19Z",
+                        "completedAt": "2026-09-07T18:24:46Z",
+                        "isRequired": false
+                      },
+                      {
+                        "__typename": "CheckRun",
+                        "name": "lint",
+                        "status": "COMPLETED",
+                        "conclusion": "SUCCESS",
+                        "startedAt": "2026-09-07T18:23:19Z",
+                        "completedAt": "2026-09-07T18:23:32Z",
+                        "isRequired": true
+                      },
+                      {
+                        "__typename": "StatusContext",
+                        "context": "optional-11",
+                        "state": "ERROR",
+                        "createdAt": "2026-09-07T18:36:43Z",
+                        "isRequired": false
+                      },
+                      {
+                        "__typename": "StatusContext",
+                        "context": "ci/setup",
+                        "state": "SUCCESS",
+                        "createdAt": "2026-09-07T18:25:23Z",
+                        "isRequired": true
+                      }
+                    ]
+                  }
+                }
+              }
+            }
+          ]
+        }
+      }
+    }
+  }
+}
