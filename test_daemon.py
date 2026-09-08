@@ -9,6 +9,9 @@
 # Aliases p0, p1 and p2 of required_checks.json carry no `baseRef`, which is
 # also the shape a token that cannot read the base branch's protection gets.
 # p3 carries one, and one of its required contexts has yet to report.
+#
+# lookup.json carries no `reviewDecision`, so it also covers a base branch that
+# asks for no reviews. The 👀 cases are unit tests below.
 
 import json
 import os
@@ -61,8 +64,9 @@ def check(**fields):
 class EmojiPrecedence(unittest.TestCase):
     """First match wins, in the order the commits fought for."""
 
-    def test_no_pull_request_is_empty(self):
-        self.assertEqual(daemon.emoji_for({"number": None}), "")
+    def test_no_pull_request_asks(self):
+        # Not empty: an empty answer means a row with nothing to say at all.
+        self.assertEqual(daemon.emoji_for({"number": None}), "❔")
 
     def test_merged_beats_everything(self):
         self.assertEqual(
@@ -78,12 +82,12 @@ class EmojiPrecedence(unittest.TestCase):
             "🟣",
         )
 
-    def test_closed_unmerged_is_empty(self):
+    def test_closed_unmerged_shuts(self):
         self.assertEqual(
             daemon.emoji_for(
                 {"number": 1, "state": "CLOSED", "mergeStateStatus": "DIRTY"}
             ),
-            "",
+            "🚪",
         )
 
     def test_draft_beats_conflict(self):
@@ -154,6 +158,65 @@ class EmojiPrecedence(unittest.TestCase):
             "🟡",
         )
 
+    def test_review_required_beats_blocked(self):
+        self.assertEqual(
+            daemon.emoji_for(
+                {
+                    "number": 1,
+                    "state": "OPEN",
+                    "mergeStateStatus": "BLOCKED",
+                    "reviewDecision": "REVIEW_REQUIRED",
+                }
+            ),
+            "👀",
+        )
+
+    def test_review_required_is_not_gated_on_the_merge_state(self):
+        # GitHub reports a missing review whatever `mergeStateStatus` says.
+        # BEHIND and UNSTABLE both fall through to ✅ further down, so gating
+        # 👀 on BLOCKED would call an unreviewed pull request mergeable.
+        for status in ("BEHIND", "UNSTABLE", "UNKNOWN", "HAS_HOOKS"):
+            self.assertEqual(
+                daemon.emoji_for(
+                    {
+                        "number": 1,
+                        "state": "OPEN",
+                        "mergeStateStatus": status,
+                        "reviewDecision": "REVIEW_REQUIRED",
+                    }
+                ),
+                "👀",
+                status,
+            )
+
+    def test_running_checks_beat_review_required(self):
+        # Chasing a reviewer is pointless while the checks can still turn red.
+        self.assertEqual(
+            daemon.emoji_for(
+                {
+                    "number": 1,
+                    "state": "OPEN",
+                    "mergeStateStatus": "BLOCKED",
+                    "reviewDecision": "REVIEW_REQUIRED",
+                    "required_running": True,
+                }
+            ),
+            "🟡",
+        )
+
+    def test_approved_but_still_blocked_stops(self):
+        self.assertEqual(
+            daemon.emoji_for(
+                {
+                    "number": 1,
+                    "state": "OPEN",
+                    "mergeStateStatus": "BLOCKED",
+                    "reviewDecision": "APPROVED",
+                }
+            ),
+            "🛑",
+        )
+
     def test_blocked(self):
         self.assertEqual(
             daemon.emoji_for(
@@ -162,9 +225,10 @@ class EmojiPrecedence(unittest.TestCase):
             "🛑",
         )
 
-    def test_unstable_passes_by_default_and_warns_on_request(self):
+    def test_unstable_reads_ok_by_default_and_follows_the_setting(self):
         pr = {"number": 1, "state": "OPEN", "mergeStateStatus": "UNSTABLE"}
-        self.assertEqual(daemon.emoji_for(pr), "✅")
+        self.assertEqual(daemon.emoji_for(pr), "🆗")
+        self.assertEqual(daemon.emoji_for(pr, "pass"), "✅")
         self.assertEqual(daemon.emoji_for(pr, "warn"), "⚠️")
 
     def test_mergeable(self):
@@ -306,14 +370,14 @@ class Lookup(unittest.TestCase):
                 (APP, "feature/a-clean"): "✅",
                 (APP, "feature/b-clean"): "✅",
                 (APP, "feature/c-blocked"): "🛑",
-                (APP, "feature/d-unstable"): "✅",
-                (APP, "main"): "",
+                (APP, "feature/d-unstable"): "🆗",
+                (APP, "main"): "🚪",
                 (SERVICE, "feature/e-clean"): "✅",
                 (SERVICE, "feature/f-clean"): "✅",
                 (SERVICE, "feature/g-clean"): "✅",
                 (SERVICE, "feature/h-blocked"): "🛑",
-                (SERVICE, "main"): "",
-                (SERVICE, "no-pr"): "",
+                (SERVICE, "main"): "🚪",
+                (SERVICE, "no-pr"): "❔",
             },
         )
 
@@ -406,7 +470,7 @@ class Publishing(unittest.TestCase):
             daemon.plan_publications(rows, {}), [("w1", None), ("w2", None)]
         )
 
-    def test_an_answered_branch_without_a_pull_request_is_cleared(self):
+    def test_an_empty_verdict_clears_the_token(self):
         rows = [("w1", SERVICE, "no-pr")]
         self.assertEqual(
             daemon.plan_publications(rows, {(SERVICE, "no-pr"): ""}), [("w1", "")]
@@ -427,6 +491,10 @@ class GuardedCycle(unittest.TestCase):
 
 
 class Queries(unittest.TestCase):
+    def test_lookup_query_asks_for_the_review_decision(self):
+        # It rides along in the branch lookup, so 👀 costs no extra request.
+        self.assertIn("reviewDecision", daemon.lookup_query(PAIRS))
+
     def test_lookup_query_aliases_every_branch_of_every_repository(self):
         query = daemon.lookup_query(PAIRS)
         self.assertIn('r0: repository(owner: "octo-org", name: "app")', query)
@@ -492,7 +560,7 @@ class Config(unittest.TestCase):
     def test_defaults_without_a_file(self):
         self.assertEqual(
             daemon.read_config(os.path.join(FIXTURES, "no-such-config.toml")),
-            (daemon.DEFAULT_INTERVAL, "pass"),
+            (daemon.DEFAULT_INTERVAL, "ok"),
         )
 
     def test_interval_and_unstable(self):
@@ -506,8 +574,12 @@ class Config(unittest.TestCase):
     def test_unreadable_values_keep_the_defaults(self):
         self.assertEqual(
             self.read('refreshIntervalSeconds = soon\nunstable = "maybe"\n'),
-            (daemon.DEFAULT_INTERVAL, "pass"),
+            (daemon.DEFAULT_INTERVAL, "ok"),
         )
+
+    def test_every_unstable_value(self):
+        for value in ("ok", "pass", "warn"):
+            self.assertEqual(self.read('unstable = "%s"\n' % value)[1], value)
 
 
 class Errors(unittest.TestCase):

@@ -2,7 +2,7 @@ id = "bonkey.pr-emoji"
 name = "PR Emoji"
 version = "0.3.0"
 min_herdr_version = "0.8.2"
-description = "One emoji per sidebar row with the pull request state of the workspace's branch: 📝 draft, ❌ required check failed, 🟡 CI running, 🛑 blocked, ⚠️ conflict, ✅ mergeable (also when only optional checks fail), 🟣 merged."
+description = "One emoji per sidebar row with the pull request state of the workspace's branch: ❔ no PR, 📝 draft, ❌ required check failed, 🟡 CI running, 👀 review required, 🛑 blocked, ⚠️ conflict, 🆗 only optional checks failing, ✅ mergeable, 🟣 merged, 🚪 closed."
 platforms = ["macos", "linux"]
 
 # Render it in config.toml by adding { token = "$pr_emoji" } to a row of

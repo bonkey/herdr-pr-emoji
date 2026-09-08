@@ -4,5 +4,5 @@
 refreshIntervalSeconds = 120
 
 # What a PR with only non-required checks failing (GitHub mergeStateStatus UNSTABLE) shows:
-#   "pass" -> ✅ (default)   "warn" -> ⚠️
-unstable = "pass"
+#   "ok" -> 🆗 (default)   "pass" -> ✅   "warn" -> ⚠️
+unstable = "ok"

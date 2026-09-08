@@ -5,7 +5,7 @@ the workspace's branch. Built to replace `mergr` for that purpose, with one spec
 behaviour: **a PR whose only failing checks are non-required reads as mergeable**, the way
 GitHub itself treats it.
 
-    ✅ bonkey/purchase-to-unlock     🟡 bonkey/ios-27-siri-ai-intents     🛑 bonkey/apple-ads-interface
+    ✅ bonkey/purchase-to-unlock     🟡 bonkey/ios-27-siri-ai-intents     👀 bonkey/apple-ads-interface
 
 ## Install
 
@@ -35,28 +35,42 @@ so after installing either restart herdr or run it once by hand:
 
 ## State mapping
 
-The decisive field is GitHub's `mergeStateStatus`, plus whether a *required* check is among
-the failing ones; first match wins:
+The decisive fields are GitHub's `mergeStateStatus` and `reviewDecision`, plus whether a
+*required* check is among the failing ones; first match wins:
 
 | Condition | Emoji |
 |---|---|
-| no PR for the branch, or a closed unmerged one | (empty) |
+| no PR for the branch | ❔ |
 | `state == MERGED` | 🟣 |
+| `state == CLOSED` (closed unmerged) | 🚪 |
 | `isDraft` | 📝 |
 | `mergeStateStatus == DIRTY` (merge conflict) | ⚠️ |
 | the newest attempt of a **required** check failed (`isRequired` on a failing check run or status) | ❌ |
 | checks still running (`statusCheckRollup.state == PENDING`, or a required check queued, in progress, or yet to report at all) | 🟡 |
-| `mergeStateStatus == BLOCKED` (review required, or otherwise not mergeable) | 🛑 |
-| `mergeStateStatus == UNSTABLE` (**only non-required checks failing**) | ✅, or ⚠️ with `unstable = "warn"` |
+| `reviewDecision == REVIEW_REQUIRED` (waiting for a reviewer) | 👀 |
+| `mergeStateStatus == BLOCKED` (not mergeable for some other reason) | 🛑 |
+| `mergeStateStatus == UNSTABLE` (**only non-required checks failing**) | 🆗, or ✅ with `unstable = "pass"`, ⚠️ with `unstable = "warn"` |
 | `mergeStateStatus` in `CLEAN`, `BEHIND`, `HAS_HOOKS` | ✅ |
 | anything else (`UNKNOWN`, GitHub still computing) | (empty), next poll |
 
-Running checks are reported before `BLOCKED`: while required checks run GitHub already
-says `BLOCKED`, and a 🛑 during every CI run is exactly the noise this plugin removes.
+An empty answer means a row with nothing to say: no branch, a remote that is not GitHub, or
+an `UNKNOWN` merge state the next poll will settle. A branch that simply has no pull request
+yet reads ❔.
+
+Running checks are reported before 👀 and `BLOCKED`: while required checks run GitHub already
+says `BLOCKED`, and a 🛑 during every CI run is exactly the noise this plugin removes. Chasing
+a reviewer is also pointless while the checks can still turn red.
+
+👀 is decided by `reviewDecision` alone, without consulting `mergeStateStatus`. A missing
+review is a fact of its own, and GitHub reports it whether the merge state says `BLOCKED`,
+`BEHIND` or `UNSTABLE` — the last two fall through to ✅ further down, so gating 👀 on
+`BLOCKED` would call an unreviewed pull request mergeable. What reaches 🛑 is therefore a
+block that is neither a failed check, nor running CI, nor a missing review: a stale required
+context, an unsatisfied deploy gate, or a base branch that asks for no reviews at all.
 
 A re-run check keeps its earlier attempts in the rollup, so only the newest attempt of each
-check name decides ❌, the way branch protection decides it. A missing review arrives as a
-required check run with the `ACTION_REQUIRED` conclusion; that is the 🛑 case, not ❌.
+check name decides ❌, the way branch protection decides it. A missing review also arrives as
+a required check run with the `ACTION_REQUIRED` conclusion, which is not breakage either.
 
 `statusCheckRollup.state` alone cannot report running checks: GitHub turns the whole rollup
 to `FAILURE` as soon as one context fails, however many are still queued, and one failing
@@ -111,7 +125,7 @@ polls in parallel with the one the server starts.
 reinstalls). See `config.example.toml`.
 
     refreshIntervalSeconds = 120   # floor: 60
-    unstable = "pass"              # "warn" shows ⚠️ for UNSTABLE
+    unstable = "ok"                # UNSTABLE: "ok" 🆗, "pass" ✅, "warn" ⚠️
 
 Logs: `daemon.log` under `$(herdr plugin state-dir)`, i.e.
 `~/.local/state/herdr/plugins/bonkey.pr-emoji/daemon.log`.

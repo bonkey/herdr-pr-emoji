@@ -36,7 +36,7 @@ LOG_LIMIT = 1000000
 
 DEFAULT_INTERVAL = 120
 MIN_INTERVAL = 60
-DEFAULT_UNSTABLE = "pass"
+DEFAULT_UNSTABLE = "ok"
 HERDR_TIMEOUT = 10
 GIT_TIMEOUT = 5
 GH_TIMEOUT = 30
@@ -98,7 +98,7 @@ def read_config(path):
             )
             interval = MIN_INTERVAL
     found = re.search(r'^[ \t]*unstable[ \t]*=[ \t]*"([a-z]*)"', text, re.MULTILINE)
-    if found and found.group(1) in ("pass", "warn"):
+    if found and found.group(1) in ("ok", "pass", "warn"):
         unstable = found.group(1)
     return interval, unstable
 
@@ -150,13 +150,24 @@ def required_state(contexts, expected=()):
 
 
 def emoji_for(pr, unstable=DEFAULT_UNSTABLE):
-    """One emoji for one pull request record. First match wins."""
+    """One emoji for one pull request record. First match wins.
+
+    A branch with no pull request reads ❔. An empty answer is reserved for a
+    row with nothing to say — no branch, or a remote that is not GitHub, both
+    of which `plan_publications` blanks — and for `UNKNOWN`, where GitHub has
+    yet to compute mergeability and the next poll decides.
+
+    `reviewDecision` is asked without `mergeStateStatus`: a missing review is a
+    fact of its own, and GitHub reports it whether the merge state says
+    BLOCKED, BEHIND or UNSTABLE. Gating it on BLOCKED would read ✅ for a pull
+    request nobody has reviewed.
+    """
     if pr.get("number") is None:
-        return ""
+        return "❔"
     if pr.get("state") == "MERGED":
         return "🟣"
     if pr.get("state") == "CLOSED":
-        return ""
+        return "🚪"
     if pr.get("isDraft"):
         return "📝"
     status = pr.get("mergeStateStatus")
@@ -166,10 +177,14 @@ def emoji_for(pr, unstable=DEFAULT_UNSTABLE):
         return "❌"
     if pr.get("rollup") == "PENDING" or pr.get("required_running"):
         return "🟡"
+    if pr.get("reviewDecision") == "REVIEW_REQUIRED":
+        return "👀"
     if status == "BLOCKED":
         return "🛑"
     if status == "UNSTABLE":
-        return "⚠️" if unstable == "warn" else "✅"
+        if unstable == "warn":
+            return "⚠️"
+        return "✅" if unstable == "pass" else "🆗"
     if status in MERGEABLE_STATUS:
         return "✅"
     return ""
@@ -196,7 +211,8 @@ def lookup_query(pairs):
         for branch_index, branch in enumerate(branches):
             fields.append(
                 "b%d: pullRequests(headRefName: %s, last: 1, orderBy: {field: CREATED_AT, direction: ASC}) "
-                "{ nodes { number isDraft state mergeStateStatus commits(last: 1) "
+                "{ nodes { number isDraft state mergeStateStatus reviewDecision "
+                "commits(last: 1) "
                 "{ nodes { commit { statusCheckRollup { state } } } } } }"
                 % (branch_index, json.dumps(branch))
             )
@@ -246,6 +262,7 @@ def parse_lookup(data, pairs):
                     isDraft=node.get("isDraft"),
                     state=node.get("state"),
                     mergeStateStatus=node.get("mergeStateStatus"),
+                    reviewDecision=node.get("reviewDecision") or "",
                     rollup=rollup or "",
                 )
             prs.append(pr)
