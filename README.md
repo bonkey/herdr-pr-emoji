@@ -42,7 +42,7 @@ The decisive fields are GitHub's `mergeStateStatus` and `reviewDecision`, plus w
 |---|---|
 | no PR for the branch | ❔ |
 | `state == MERGED` | 🟣 |
-| `state == CLOSED` (closed unmerged) | 🚪 |
+| `state == CLOSED` (closed unmerged), unless the branch is the repository's default | 🚪 |
 | `isDraft` | 📝 |
 | `mergeStateStatus == DIRTY` (merge conflict) | ⚠️ |
 | the newest attempt of a **required** check failed (`isRequired` on a failing check run or status) | ❌ |
@@ -56,6 +56,11 @@ The decisive fields are GitHub's `mergeStateStatus` and `reviewDecision`, plus w
 An empty answer means a row with nothing to say: no branch, a remote that is not GitHub, or
 an `UNKNOWN` merge state the next poll will settle. A branch that simply has no pull request
 yet reads ❔.
+
+🚪 is suppressed on the default branch. `pullRequests(headRefName:, last: 1)` keeps finding
+whatever pull request last carried the trunk's name — a release sync closed months ago, say —
+so a door there would never go away. Only the door is suppressed: a pull request open *from*
+the trunk is real work and reads like any other.
 
 Running checks are reported before 👀 and `BLOCKED`: while required checks run GitHub already
 says `BLOCKED`, and a 🛑 during every CI run is exactly the noise this plugin removes. Chasing

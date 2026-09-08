@@ -167,7 +167,10 @@ def emoji_for(pr, unstable=DEFAULT_UNSTABLE):
     if pr.get("state") == "MERGED":
         return "🟣"
     if pr.get("state") == "CLOSED":
-        return "🚪"
+        # The trunk keeps whatever pull request last carried its name, and
+        # `last: 1` goes on finding it for as long as the branch exists, so a
+        # door on the default branch is history nobody acts on.
+        return "" if pr.get("on_default_branch") else "🚪"
     if pr.get("isDraft"):
         return "📝"
     status = pr.get("mergeStateStatus")
@@ -217,7 +220,7 @@ def lookup_query(pairs):
                 % (branch_index, json.dumps(branch))
             )
         body.append(
-            "r%d: repository(owner: %s, name: %s) { %s }"
+            "r%d: repository(owner: %s, name: %s) { defaultBranchRef { name } %s }"
             % (repo_index, json.dumps(owner), json.dumps(name), " ".join(fields))
         )
     return "query { %s }" % " ".join(body)
@@ -245,13 +248,19 @@ def parse_lookup(data, pairs):
     data = data or {}
     for repo_index, (slug, branches) in enumerate(group_branches(pairs)):
         repo = data.get("r%d" % repo_index)
+        default_branch = ((repo or {}).get("defaultBranchRef") or {}).get("name") or ""
         for branch_index, branch in enumerate(branches):
             field = repo.get("b%d" % branch_index) if repo is not None else None
             if field is None:
                 unanswered.append((slug, branch))
                 continue
             nodes = field.get("nodes") or []
-            pr = {"slug": slug, "branch": branch, "number": None}
+            pr = {
+                "slug": slug,
+                "branch": branch,
+                "number": None,
+                "on_default_branch": bool(default_branch) and branch == default_branch,
+            }
             if nodes:
                 node = nodes[0]
                 commits = (node.get("commits") or {}).get("nodes") or []

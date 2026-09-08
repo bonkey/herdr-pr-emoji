@@ -11,7 +11,9 @@
 # p3 carries one, and one of its required contexts has yet to report.
 #
 # lookup.json carries no `reviewDecision`, so it also covers a base branch that
-# asks for no reviews. The 👀 cases are unit tests below.
+# asks for no reviews. The 👀 cases are unit tests below. Its `defaultBranchRef`
+# is the one field added by hand, so the recorded response covers the rule that
+# keeps a door off the trunk.
 
 import json
 import os
@@ -88,6 +90,32 @@ class EmojiPrecedence(unittest.TestCase):
                 {"number": 1, "state": "CLOSED", "mergeStateStatus": "DIRTY"}
             ),
             "🚪",
+        )
+
+    def test_closed_on_the_default_branch_stays_quiet(self):
+        # The trunk keeps whatever pull request last carried its name, so a
+        # door there would never go away.
+        self.assertEqual(
+            daemon.emoji_for(
+                {"number": 1, "state": "CLOSED", "on_default_branch": True}
+            ),
+            "",
+        )
+
+    def test_the_default_branch_still_reports_every_other_state(self):
+        # Only the door is suppressed: a pull request open from the trunk is
+        # real work and reads like any other.
+        self.assertEqual(
+            daemon.emoji_for(
+                {
+                    "number": 1,
+                    "state": "OPEN",
+                    "mergeStateStatus": "BLOCKED",
+                    "reviewDecision": "REVIEW_REQUIRED",
+                    "on_default_branch": True,
+                }
+            ),
+            "👀",
         )
 
     def test_draft_beats_conflict(self):
@@ -371,12 +399,12 @@ class Lookup(unittest.TestCase):
                 (APP, "feature/b-clean"): "✅",
                 (APP, "feature/c-blocked"): "🛑",
                 (APP, "feature/d-unstable"): "🆗",
-                (APP, "main"): "🚪",
+                (APP, "main"): "",
                 (SERVICE, "feature/e-clean"): "✅",
                 (SERVICE, "feature/f-clean"): "✅",
                 (SERVICE, "feature/g-clean"): "✅",
                 (SERVICE, "feature/h-blocked"): "🛑",
-                (SERVICE, "main"): "🚪",
+                (SERVICE, "main"): "",
                 (SERVICE, "no-pr"): "❔",
             },
         )
@@ -491,6 +519,10 @@ class GuardedCycle(unittest.TestCase):
 
 
 class Queries(unittest.TestCase):
+    def test_lookup_query_asks_the_default_branch_once_per_repository(self):
+        query = daemon.lookup_query(PAIRS)
+        self.assertEqual(query.count("defaultBranchRef { name }"), 2)
+
     def test_lookup_query_asks_for_the_review_decision(self):
         # It rides along in the branch lookup, so 👀 costs no extra request.
         self.assertIn("reviewDecision", daemon.lookup_query(PAIRS))

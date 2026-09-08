@@ -1,6 +1,9 @@
 {
   "data": {
     "r0": {
+      "defaultBranchRef": {
+        "name": "main"
+      },
       "b0": {
         "nodes": [
           {
