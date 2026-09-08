@@ -480,6 +480,19 @@ def cycle(interval, unstable):
     return True
 
 
+def guarded_cycle(interval, unstable):
+    """One cycle, with an unexpected answer contained.
+
+    A payload no parser expected must cost one cycle, not the daemon: without a
+    daemon nothing refreshes the tokens and every emoji disappears.
+    """
+    try:
+        return cycle(interval, unstable)
+    except Exception as exc:
+        log("cycle failed: %r" % exc)
+        return True
+
+
 def read_pairs(stream, slug=None):
     """Sorted (slug, branch) pairs from "owner/name<TAB>branch" lines on a
     stream, or from bare branch names when one slug covers all of them."""
@@ -593,7 +606,7 @@ def main(argv):
         print_verdicts(read_pairs(sys.stdin), unstable, with_slug=True)
         return 0
     if command == "--once":
-        if not cycle(interval, unstable):
+        if not guarded_cycle(interval, unstable):
             log("herdr unreachable")
         return 0
 
@@ -606,7 +619,7 @@ def main(argv):
     failures = 0
     try:
         while True:
-            if cycle(interval, unstable):
+            if guarded_cycle(interval, unstable):
                 failures = 0
             else:
                 failures += 1

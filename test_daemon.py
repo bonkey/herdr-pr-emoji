@@ -343,6 +343,19 @@ class Publishing(unittest.TestCase):
         )
 
 
+class GuardedCycle(unittest.TestCase):
+    def test_an_unexpected_answer_costs_one_cycle_not_the_daemon(self):
+        def raising(*_):
+            raise AttributeError("'list' object has no attribute 'get'")
+
+        original = daemon.cycle
+        daemon.cycle = raising
+        try:
+            self.assertTrue(daemon.guarded_cycle(120, "pass"))
+        finally:
+            daemon.cycle = original
+
+
 class Queries(unittest.TestCase):
     def test_lookup_query_aliases_every_branch_of_every_repository(self):
         query = daemon.lookup_query(PAIRS)
