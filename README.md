@@ -45,7 +45,7 @@ the failing ones; first match wins:
 | `isDraft` | 📝 |
 | `mergeStateStatus == DIRTY` (merge conflict) | ⚠️ |
 | the newest attempt of a **required** check failed (`isRequired` on a failing check run or status) | ❌ |
-| checks still running (`statusCheckRollup.state == PENDING`, or a required check queued or in progress) | 🟡 |
+| checks still running (`statusCheckRollup.state == PENDING`, or a required check queued, in progress, or yet to report at all) | 🟡 |
 | `mergeStateStatus == BLOCKED` (review required, or otherwise not mergeable) | 🛑 |
 | `mergeStateStatus == UNSTABLE` (**only non-required checks failing**) | ✅, or ⚠️ with `unstable = "warn"` |
 | `mergeStateStatus` in `CLEAN`, `BEHIND`, `HAS_HOOKS` | ✅ |
@@ -63,6 +63,15 @@ to `FAILURE` as soon as one context fails, however many are still queued, and on
 optional check is enough. So 🟡 also comes from the individual required checks, which the
 same request already carries.
 
+The rollup cannot report a required check that has posted **nothing yet** either — an
+unreported context is absent from it, not pending. GitHub shows that one as *Expected —
+waiting for status to be reported* and blocks the merge on it, so the second request also
+asks the base branch for `requiredStatusCheckContexts`: a required context no check has
+reported counts as running, and reads 🟡 rather than 🛑. A name counts as reported however
+GitHub marked it, so a check whose `isRequired` says false while branch protection asks for
+the same name cannot pin the emoji to 🟡. Where the token cannot read the branch protection
+rule, the verdict rests on the checks that did report.
+
 ## How it polls
 
 One long-lived loop, started with the server. Each cycle:
@@ -73,9 +82,10 @@ One long-lived loop, started with the server. Each cycle:
 2. For each workspace, `git branch --show-current` and the `origin` URL, locally.
 3. **One GraphQL request for every repository and branch at once**
    (`pullRequests(headRefName:, last: 1)` aliased per branch), so the answer is exact even
-   for merged branches. A second request, only for open PRs whose checks report a failure,
-   asks each check `isRequired(pullRequestNumber:)` to tell ❌ from 🛑. Two calls per cycle,
-   however many repositories are open.
+   for merged branches. A second request, only for open PRs that report a failure or are
+   `BLOCKED`, asks each check `isRequired(pullRequestNumber:)` and the base branch for
+   `requiredStatusCheckContexts`, to tell ❌ from 🟡 from 🛑. Two calls per cycle, however
+   many repositories are open.
 4. `report-metadata` on the workspace and each of its panes, with a TTL of three
    intervals: if the daemon dies, the emoji disappears instead of going stale.
 

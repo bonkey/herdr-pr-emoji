@@ -5,6 +5,10 @@
 # pull requests, with owners, repositories, branches, pull request numbers and
 # check names replaced by neutral ones and most of the passing optional checks
 # dropped. Their shape, states and timestamps are untouched.
+#
+# Aliases p0, p1 and p2 of required_checks.json carry no `baseRef`, which is
+# also the shape a token that cannot read the base branch's protection gets.
+# p3 carries one, and one of its required contexts has yet to report.
 
 import json
 import os
@@ -190,6 +194,11 @@ class RequiredChecks(unittest.TestCase):
         ]
         return rollup["contexts"]["nodes"]
 
+    def expected(self, alias):
+        pull = fixture("required_checks.json")["data"][alias]["pullRequest"]
+        rule = (pull.get("baseRef") or {}).get("branchProtectionRule") or {}
+        return rule.get("requiredStatusCheckContexts") or []
+
     def test_recorded_optional_failure_is_not_a_failure(self):
         # p0: three required checks passed, an optional one was CANCELLED.
         self.assertEqual(daemon.required_state(self.contexts("p0")), (False, False))
@@ -243,6 +252,38 @@ class RequiredChecks(unittest.TestCase):
         ]
         self.assertEqual(daemon.required_state(contexts), (False, True))
 
+    def test_recorded_expected_context_that_never_reported_runs(self):
+        # p3: four required contexts, one of which ("ci/checkpoint") had posted
+        # nothing, so it is absent from the rollup rather than passing. GitHub
+        # calls it expected and blocks the merge on it; 🛑 would hide a CI run.
+        contexts = self.contexts("p3")
+        names = [c.get("name") or c.get("context") for c in contexts]
+        self.assertNotIn("ci/checkpoint", names)
+        self.assertEqual(
+            daemon.required_state(contexts, self.expected("p3")), (False, True)
+        )
+
+    def test_recorded_pull_request_without_branch_protection_keeps_its_verdict(self):
+        # With no expected contexts, the checks that did report decide alone.
+        self.assertEqual(self.expected("p0"), [])
+        self.assertEqual(daemon.required_state(self.contexts("p0"), []), (False, False))
+
+    def test_expected_context_that_reported_does_not_run(self):
+        contexts = [check(name="lint", conclusion="SUCCESS")]
+        self.assertEqual(daemon.required_state(contexts, ["lint"]), (False, False))
+
+    def test_expected_context_reported_as_optional_does_not_run(self):
+        # Branch protection asks for the name, GitHub marks the run optional.
+        # Counting it as unreported would pin the emoji to 🟡 for good.
+        contexts = [check(name="lint", conclusion="SUCCESS", isRequired=False)]
+        self.assertEqual(daemon.required_state(contexts, ["lint"]), (False, False))
+
+    def test_expected_context_that_never_reported_beats_a_passing_sibling(self):
+        contexts = [check(name="lint", conclusion="SUCCESS")]
+        self.assertEqual(
+            daemon.required_state(contexts, ["lint", "unit-tests"]), (False, True)
+        )
+
     def test_optional_checks_are_ignored(self):
         contexts = [
             check(conclusion="FAILURE", completedAt="2026-09-08T11:00:00Z", isRequired=False),
@@ -291,15 +332,44 @@ class Lookup(unittest.TestCase):
         self.assertEqual(prs, [])
         self.assertEqual(unanswered, PAIRS)
 
-    def test_required_targets_are_open_pull_requests_with_a_failing_rollup(self):
+    def test_required_targets_are_open_pull_requests_that_fail_or_are_blocked(self):
         prs = [
             {"slug": APP, "number": 1, "state": "OPEN", "rollup": "SUCCESS"},
             {"slug": APP, "number": 2, "state": "OPEN", "rollup": "FAILURE"},
             {"slug": APP, "number": 3, "state": "OPEN", "rollup": "ERROR"},
             {"slug": APP, "number": 4, "state": "MERGED", "rollup": "FAILURE"},
             {"slug": APP, "number": None},
+            # Nothing failed and nothing is queued, and the merge is still
+            # blocked: only the required checks can say whether one of them
+            # has yet to report.
+            {
+                "slug": APP,
+                "number": 5,
+                "state": "OPEN",
+                "rollup": "SUCCESS",
+                "mergeStateStatus": "BLOCKED",
+            },
         ]
-        self.assertEqual(daemon.required_targets(prs), [(APP, 2), (APP, 3)])
+        self.assertEqual(daemon.required_targets(prs), [(APP, 2), (APP, 3), (APP, 5)])
+
+    def test_expected_required_check_reads_as_running_not_blocked(self):
+        # The whole path for the recorded pull request of p3: blocked, rollup
+        # FAILURE from one optional check, every reported required check green,
+        # one required context still unreported.
+        prs = [
+            {
+                "slug": APP,
+                "branch": "feature/c-blocked",
+                "number": 104,
+                "state": "OPEN",
+                "mergeStateStatus": "BLOCKED",
+                "rollup": "FAILURE",
+            }
+        ]
+        data = {"p0": fixture("required_checks.json")["data"]["p3"]}
+        marks = daemon.parse_required(data, [(APP, 104)])
+        self.assertEqual(marks, {(APP, 104): (False, True)})
+        self.assertEqual(daemon.decide(prs, marks)[(APP, "feature/c-blocked")], "🟡")
 
     def test_unanswered_pull_request_falls_back_to_blocked(self):
         # The recorded shape of a pull request GitHub reported an error for.
@@ -369,6 +439,14 @@ class Queries(unittest.TestCase):
         self.assertIn("p0: repository", query)
         self.assertIn("pullRequest(number: 104)", query)
         self.assertIn("isRequired(pullRequestNumber: 104)", query)
+
+    def test_required_query_asks_what_the_base_branch_requires(self):
+        query = daemon.required_query([(APP, 104)])
+        self.assertIn(
+            "baseRef { branchProtectionRule { requiredStatusCheckContexts } }", query
+        )
+        # One selection set on `pullRequest`, not two.
+        self.assertEqual(query.count("pullRequest(number: 104)"), 1)
 
     def test_both_queries_are_balanced(self):
         # One brace short and GitHub rejects the whole request with

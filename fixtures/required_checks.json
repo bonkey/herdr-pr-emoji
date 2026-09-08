@@ -211,6 +211,84 @@
           ]
         }
       }
+    },
+    "p3": {
+      "pullRequest": {
+        "baseRef": {
+          "branchProtectionRule": {
+            "requiredStatusCheckContexts": [
+              "ci/setup",
+              "ci/checkpoint",
+              "release-notes",
+              "approval / approval"
+            ]
+          }
+        },
+        "commits": {
+          "nodes": [
+            {
+              "commit": {
+                "statusCheckRollup": {
+                  "contexts": {
+                    "nodes": [
+                      {
+                        "__typename": "CheckRun",
+                        "name": "approval / approval",
+                        "status": "COMPLETED",
+                        "conclusion": "CANCELLED",
+                        "startedAt": "2026-09-08T16:44:21Z",
+                        "completedAt": "2026-09-08T16:44:24Z",
+                        "isRequired": true
+                      },
+                      {
+                        "__typename": "CheckRun",
+                        "name": "approval / approval",
+                        "status": "COMPLETED",
+                        "conclusion": "SUCCESS",
+                        "startedAt": "2026-09-08T16:44:40Z",
+                        "completedAt": "2026-09-08T16:45:03Z",
+                        "isRequired": true
+                      },
+                      {
+                        "__typename": "CheckRun",
+                        "name": "release-notes",
+                        "status": "COMPLETED",
+                        "conclusion": "SUCCESS",
+                        "startedAt": "2026-09-08T16:42:43Z",
+                        "completedAt": "2026-09-08T16:42:54Z",
+                        "isRequired": true
+                      },
+                      {
+                        "__typename": "CheckRun",
+                        "name": "required-review",
+                        "status": "COMPLETED",
+                        "conclusion": "ACTION_REQUIRED",
+                        "startedAt": "2026-09-08T16:44:56Z",
+                        "completedAt": "2026-09-08T16:45:00Z",
+                        "isRequired": false
+                      },
+                      {
+                        "__typename": "StatusContext",
+                        "context": "ci/build(core)",
+                        "state": "SUCCESS",
+                        "createdAt": "2026-09-08T16:51:59Z",
+                        "isRequired": false
+                      },
+                      {
+                        "__typename": "StatusContext",
+                        "context": "ci/setup",
+                        "state": "SUCCESS",
+                        "createdAt": "2026-09-08T16:45:45Z",
+                        "isRequired": true
+                      }
+                    ]
+                  }
+                }
+              }
+            }
+          ]
+        }
+      }
     }
   }
 }

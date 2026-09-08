@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 # One long-lived loop: every cycle, resolve each workspace's branch locally,
 # ask GitHub in one request for the newest pull request of every branch (plus
-# one for the required checks of PRs with failures), and publish one emoji as
-# the `pr_emoji` token on the workspace (Space rows) and on each of its panes
-# (Agent rows).
+# one for the required checks of the PRs that fail or are blocked), and publish
+# one emoji as the `pr_emoji` token on the workspace (Space rows) and on each
+# of its panes (Agent rows).
 #
 #   python3 daemon.py                      loop; started by herdr as a [[startup]] hook
 #   python3 daemon.py --once               one cycle, then exit (manual refresh, development)
@@ -106,19 +106,28 @@ def read_config(path):
 # ---------------------------------------------------------------- pure decisions
 
 
-def required_state(contexts):
+def required_state(contexts, expected=()):
     """(failing, running) over the newest attempt of every required check.
 
     A re-run keeps every earlier attempt in the rollup, so only the newest
     attempt of a check name counts, the way branch protection counts it. An
     attempt still in flight is the newest whatever its timestamp says: a queued
     run can report a `startedAt` days old.
+
+    `expected` is the base branch's required contexts. One that has posted
+    nothing at all is absent from the rollup rather than passing, and GitHub
+    blocks the merge on it as "Expected - waiting for status to be reported",
+    so it counts as running. A name counts as reported however GitHub marked
+    it: a context whose `isRequired` says false while branch protection asks
+    for the same name would otherwise stay pending for good.
     """
     latest = {}
+    reported = set()
     for context in contexts:
+        name = context.get("name") or context.get("context") or ""
+        reported.add(name)
         if context.get("isRequired") is not True:
             continue
-        name = context.get("name") or context.get("context") or ""
         at = (
             context.get("completedAt")
             or context.get("startedAt")
@@ -134,7 +143,9 @@ def required_state(contexts):
         if name not in latest or rank >= latest[name][0]:
             latest[name] = (rank, result, running)
     failing = any(result in FAILING_RESULTS for _, result, _ in latest.values())
-    running = any(running for _, _, running in latest.values())
+    running = any(running for _, _, running in latest.values()) or any(
+        name not in reported for name in expected
+    )
     return failing, running
 
 
@@ -242,27 +253,44 @@ def parse_lookup(data, pairs):
 
 
 def required_targets(prs):
-    """The open pull requests whose rollup reports a failure, in alias order.
+    """The open pull requests whose checks need a closer look, in alias order.
 
     `statusCheckRollup.state` cannot answer the ❌/🟡/🛑 question on its own:
     GitHub reports FAILURE for the whole rollup as soon as one context fails,
     however many are still queued, and one failing optional check is enough.
+
+    A BLOCKED pull request needs the same look: a required context that has
+    posted nothing leaves no trace in the rollup, so a clean-looking BLOCKED
+    pull request can still be waiting for a required check.
     """
     targets = set()
     for pr in prs:
-        if pr.get("state") == "OPEN" and pr.get("rollup") in ("FAILURE", "ERROR"):
+        if pr.get("state") != "OPEN":
+            continue
+        if (
+            pr.get("rollup") in ("FAILURE", "ERROR")
+            or pr.get("mergeStateStatus") == "BLOCKED"
+        ):
             targets.add((pr["slug"], pr["number"]))
     return sorted(targets)
 
 
 def required_query(targets):
-    """isRequired(pullRequestNumber:) on every check of every target, one request."""
+    """isRequired(pullRequestNumber:) on every check of every target, plus what
+    the base branch requires, one request.
+
+    `requiredStatusCheckContexts` names the checks that have to pass, whether
+    or not they have reported: a required context missing from the rollup is
+    the difference between 🟡 and 🛑.
+    """
     body = []
     for index, (slug, number) in enumerate(targets):
         owner, name = slug.split("/", 1)
         body.append(
             "p%d: repository(owner: %s, name: %s) "
-            "{ pullRequest(number: %d) { commits(last: 1) { nodes { commit { statusCheckRollup "
+            "{ pullRequest(number: %d) "
+            "{ baseRef { branchProtectionRule { requiredStatusCheckContexts } } "
+            "commits(last: 1) { nodes { commit { statusCheckRollup "
             "{ contexts(first: 100) { nodes { __typename "
             "... on CheckRun { name status conclusion startedAt completedAt isRequired(pullRequestNumber: %d) } "
             "... on StatusContext { context state createdAt isRequired(pullRequestNumber: %d) } } } } } } } } }"
@@ -272,7 +300,12 @@ def required_query(targets):
 
 
 def parse_required(data, targets):
-    """{(slug, number): (failing, running)} for the targets the answer covers."""
+    """{(slug, number): (failing, running)} for the targets the answer covers.
+
+    A token that cannot read the base branch's protection gets a null rule,
+    which leaves the expected contexts empty: the verdict then rests on the
+    checks that did report.
+    """
     marks = {}
     data = data or {}
     for index, target in enumerate(targets):
@@ -286,7 +319,9 @@ def parse_required(data, targets):
         commit = (commits[0] or {}).get("commit") if commits else None
         rollup = (commit or {}).get("statusCheckRollup") or {}
         contexts = (rollup.get("contexts") or {}).get("nodes") or []
-        marks[target] = required_state(contexts)
+        rule = (pull.get("baseRef") or {}).get("branchProtectionRule") or {}
+        expected = rule.get("requiredStatusCheckContexts") or []
+        marks[target] = required_state(contexts, expected)
     return marks
 
 
