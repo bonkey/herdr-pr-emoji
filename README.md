@@ -51,11 +51,17 @@ The decisive fields are GitHub's `mergeStateStatus` and `reviewDecision`, plus w
 | `mergeStateStatus == BLOCKED` (not mergeable for some other reason) | 🛑 |
 | `mergeStateStatus == UNSTABLE` (**only non-required checks failing**) | 🆗, or ✅ with `unstable = "pass"`, ⚠️ with `unstable = "warn"` |
 | `mergeStateStatus` in `CLEAN`, `BEHIND`, `HAS_HOOKS` | ✅ |
-| anything else (`UNKNOWN`, GitHub still computing) | (empty), next poll |
+| anything else (`UNKNOWN`, GitHub still computing) | keeps its last emoji, next poll |
 
-An empty answer means a row with nothing to say: no branch, a remote that is not GitHub, or
-an `UNKNOWN` merge state the next poll will settle. A branch that simply has no pull request
-yet reads ❔.
+An empty answer means a row with nothing to say: no branch, a remote that is not GitHub, or a
+closed pull request on the default branch. A branch that simply has no pull request yet reads
+❔.
+
+An open pull request no row above matched keeps the emoji it already shows instead of losing
+it. `UNKNOWN` is GitHub asking to be asked again: it invalidates mergeability whenever the
+base branch moves and recomputes it only when something requests it, so the very query that
+reports `UNKNOWN` is what makes the next one exact. A status this plugin does not recognise
+is treated the same way. The TTL of three intervals still expires whatever nobody refreshes.
 
 🚪 is suppressed on the default branch. `pullRequests(headRefName:, last: 1)` keeps finding
 whatever pull request last carried the trunk's name — a release sync closed months ago, say —

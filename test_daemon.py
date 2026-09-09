@@ -269,6 +269,8 @@ class EmojiPrecedence(unittest.TestCase):
                 status,
             )
 
+    # `decide` turns this empty answer into no verdict at all, so the row keeps
+    # what it shows; see Lookup below.
     def test_unknown_status_is_empty(self):
         self.assertEqual(
             daemon.emoji_for(
@@ -462,6 +464,51 @@ class Lookup(unittest.TestCase):
         marks = daemon.parse_required(data, [(APP, 104)])
         self.assertEqual(marks, {(APP, 104): (False, True)})
         self.assertEqual(daemon.decide(prs, marks)[(APP, "feature/c-blocked")], "🟡")
+
+    def test_an_unknown_merge_state_keeps_the_last_emoji(self):
+        # GitHub invalidates mergeability whenever the base branch moves and
+        # recomputes it only on request, so the query that reports UNKNOWN is
+        # what makes the next one exact. Clearing the token blanks the row for
+        # at least one interval, and for longer whenever the next cycle fails.
+        prs = [
+            {
+                "slug": APP,
+                "branch": "feature/a-clean",
+                "number": 101,
+                "state": "OPEN",
+                "mergeStateStatus": "UNKNOWN",
+            }
+        ]
+        self.assertEqual(daemon.decide(prs, {}), {})
+        rows = [("w1", APP, "feature/a-clean")]
+        self.assertEqual(daemon.plan_publications(rows, daemon.decide(prs, {})), [("w1", None)])
+
+    def test_an_unrecognised_merge_state_keeps_the_last_emoji(self):
+        # A status this plugin has never heard of is no better a reason to
+        # erase a good emoji than UNKNOWN is.
+        prs = [
+            {
+                "slug": APP,
+                "branch": "feature/a-clean",
+                "number": 101,
+                "state": "OPEN",
+                "mergeStateStatus": "SOMETHING_GITHUB_ADDED",
+            }
+        ]
+        self.assertEqual(daemon.decide(prs, {}), {})
+
+    def test_a_closed_pull_request_on_the_trunk_is_still_cleared(self):
+        # Empty is the verdict there, not the absence of one.
+        prs = [
+            {
+                "slug": APP,
+                "branch": "main",
+                "number": 105,
+                "state": "CLOSED",
+                "on_default_branch": True,
+            }
+        ]
+        self.assertEqual(daemon.decide(prs, {}), {(APP, "main"): ""})
 
     def test_unanswered_pull_request_falls_back_to_blocked(self):
         # The recorded shape of a pull request GitHub reported an error for.

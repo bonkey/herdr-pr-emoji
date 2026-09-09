@@ -356,12 +356,24 @@ def decide(prs, marks, unstable=DEFAULT_UNSTABLE):
 
     A pull request the required-check query did not answer for keeps the
     defaults, so it loses only its ❌ and 🟡 verdicts and stays on 🛑.
+
+    An open pull request no row of `emoji_for` matched gets no verdict at all,
+    which leaves its emoji alone rather than erasing it. `UNKNOWN` is GitHub
+    asking to be asked again — it invalidates mergeability whenever the base
+    branch moves, and computes it only when something requests it, so the very
+    query that reports `UNKNOWN` is what makes the next one exact. Publishing
+    an empty token for that clears the row, and a status this plugin does not
+    recognise is no better a reason to erase a good emoji. The TTL still
+    expires whatever nobody refreshes.
     """
     verdicts = {}
     for pr in prs:
         failing, running = marks.get((pr["slug"], pr.get("number")), (False, False))
         pr["required_failing"], pr["required_running"] = failing, running
-        verdicts[(pr["slug"], pr["branch"])] = emoji_for(pr, unstable)
+        emoji = emoji_for(pr, unstable)
+        if not emoji and pr.get("number") is not None and pr.get("state") == "OPEN":
+            continue
+        verdicts[(pr["slug"], pr["branch"])] = emoji
     return verdicts
 
 
