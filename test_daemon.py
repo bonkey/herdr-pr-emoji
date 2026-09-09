@@ -739,6 +739,21 @@ class Remotes(unittest.TestCase):
         ):
             self.assertEqual(daemon.slug_from_url(url), "octo-org/app", url)
 
+    def test_ssh_host_alias_remotes(self):
+        """Multi-account setups point origin at an ssh config alias, not github.com."""
+        alias = lambda host: host == "github.com-work"
+        for url in (
+            "git@github.com-work:octo-org/app.git",
+            "ssh://git@github.com-work/octo-org/app",
+        ):
+            self.assertEqual(daemon.slug_from_url(url, alias), "octo-org/app", url)
+
+    def test_ssh_host_alias_for_other_forge(self):
+        """An alias that does not resolve to github.com stays unmatched."""
+        self.assertEqual(
+            daemon.slug_from_url("git@gl-work:octo-org/app.git", lambda h: False), ""
+        )
+
     def test_other_remotes(self):
         for url in (
             "git@gitlab.com:octo-org/app.git",

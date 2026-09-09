@@ -517,14 +517,56 @@ def github_slug(path):
     return slug_from_url(out.strip()) if rc == 0 else ""
 
 
-def slug_from_url(url):
+SSH_HOST_CACHE = {}
+
+
+def ssh_host_is_github(host):
+    """True when ssh config resolves `host` to github.com.
+
+    Multi-account setups give each account its own Host alias, so origin reads
+    git@github.com-work:owner/name rather than git@github.com:owner/name. Only
+    ssh knows the alias, so ask it, and cache per host — this runs once per
+    repository per cycle.
+    """
+    if host in SSH_HOST_CACHE:
+        return SSH_HOST_CACHE[host]
+    answer = False
+    if shutil.which("ssh"):
+        rc, out, _ = run(["ssh", "-G", host], GIT_TIMEOUT)
+        if rc == 0:
+            for line in out.splitlines():
+                if line.lower().startswith("hostname "):
+                    answer = line.split(None, 1)[1].strip().lower() == "github.com"
+                    break
+    SSH_HOST_CACHE[host] = answer
+    return answer
+
+
+def alias_path(url, host_is_github):
+    """The owner/name part of an ssh URL whose host is a github.com alias."""
+    if url.startswith("ssh://"):
+        rest = url[len("ssh://"):]
+        host, _, path = rest.partition("/")
+    elif "://" in url:
+        return ""
+    else:
+        host, _, path = url.partition(":")
+    host = host.rpartition("@")[2]
+    if not host or not path or "@" in path:
+        return ""
+    return path if host_is_github(host) else ""
+
+
+def slug_from_url(url, host_is_github=None):
     """owner/name for a github.com remote URL, empty for anything else."""
     for prefix in ("git@github.com:", "ssh://git@github.com/", "https://github.com/"):
         if url.startswith(prefix):
             url = url[len(prefix):]
             break
     else:
-        return ""
+        url = alias_path(url, host_is_github or ssh_host_is_github)
+        if not url:
+            return ""
     if url.endswith(".git"):
         url = url[: -len(".git")]
     parts = url.rstrip("/").split("/")
