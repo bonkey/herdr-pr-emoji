@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 # One long-lived loop: every cycle, resolve each workspace's branch locally,
 # ask GitHub in one request for the newest pull request of every branch (plus
-# one for the required checks of the PRs that fail or are blocked), and publish
-# one emoji as the `pr_emoji` token on the workspace (Space rows) and on each
-# of its panes (Agent rows).
+# one for the required checks and open conversations of the PRs that fail or
+# are blocked), and publish one emoji as the `pr_emoji` token on the workspace
+# (Space rows) and on each of its panes (Agent rows).
 #
 #   python3 daemon.py                      loop; started by herdr as a [[startup]] hook
 #   python3 daemon.py --once               one cycle, then exit (manual refresh, development)
@@ -149,8 +149,8 @@ def required_state(contexts, expected=()):
     return failing, running
 
 
-def emoji_for(pr, unstable=DEFAULT_UNSTABLE):
-    """One emoji for one pull request record. First match wins.
+def blocker_for(pr, unstable=DEFAULT_UNSTABLE):
+    """The one thing most worth doing about a pull request. First match wins.
 
     A branch with no pull request reads ❔. An empty answer is reserved for a
     row with nothing to say — no branch, or a remote that is not GitHub, both
@@ -161,6 +161,10 @@ def emoji_for(pr, unstable=DEFAULT_UNSTABLE):
     fact of its own, and GitHub reports it whether the merge state says
     BLOCKED, BEHIND or UNSTABLE. Gating it on BLOCKED would read ✅ for a pull
     request nobody has reviewed.
+
+    🟠 separates a failure that is still growing from a settled one: while
+    other required checks run, the list of what to fix is incomplete, and
+    fixing it now invites a second pass.
     """
     if pr.get("number") is None:
         return "❔"
@@ -177,7 +181,7 @@ def emoji_for(pr, unstable=DEFAULT_UNSTABLE):
     if status == "DIRTY":
         return "⚠️"
     if pr.get("required_failing"):
-        return "❌"
+        return "🟠" if pr.get("required_running") else "❌"
     if pr.get("rollup") == "PENDING" or pr.get("required_running"):
         return "🟡"
     if pr.get("reviewDecision") == "REVIEW_REQUIRED":
@@ -191,6 +195,50 @@ def emoji_for(pr, unstable=DEFAULT_UNSTABLE):
     if status in MERGEABLE_STATUS:
         return "✅"
     return ""
+
+
+def conversation_block(pull):
+    """True when the base branch asks for resolved conversations and a thread
+    is still open.
+
+    An unresolved thread is ordinary on a pull request whose base branch never
+    asks about it, so the protection rule decides whether it means anything. A
+    rule the token cannot read is a null rule, which answers False and leaves
+    the pull request on 🛑 — the fallback `requiredStatusCheckContexts`
+    already gets, and the one a repository governed by rulesets rather than
+    branch protection gets too.
+
+    Only the first hundred threads are asked for. Past that the answer is 🛑
+    again, never a 💬 the pull request has not been shown to have earned.
+    GitHub counts an outdated thread as unresolved, so `isOutdated` decides
+    nothing here.
+    """
+    rule = (pull.get("baseRef") or {}).get("branchProtectionRule") or {}
+    if not rule.get("requiresConversationResolution"):
+        return False
+    threads = (pull.get("reviewThreads") or {}).get("nodes") or []
+    return any(thread.get("isResolved") is False for thread in threads)
+
+
+def emoji_for(pr, unstable=DEFAULT_UNSTABLE):
+    """The blocker, and 💬 after it when conversations are open too.
+
+    A missing review and an unresolved conversation are two errands for two
+    people: the reviewer who has not looked yet, and whoever answers the
+    threads an earlier reviewer or a review bot left behind. One emoji cannot
+    ask for both, so 💬 is the one modifier that rides along, and the token
+    is never wider than two.
+
+    🛑 is replaced rather than suffixed: it means "blocked, and this plugin
+    cannot say why", and open conversations say why. An empty verdict keeps
+    its emptiness — UNKNOWN has to go on falling through to whatever the row
+    already shows — and a draft swallows 💬 the way it swallows every other
+    blocker.
+    """
+    verdict = blocker_for(pr, unstable)
+    if not verdict or pr.get("isDraft") or not pr.get("conversation_block"):
+        return verdict
+    return "💬" if verdict == "🛑" else verdict + "💬"
 
 
 def describe_errors(errors):
@@ -307,7 +355,9 @@ def required_query(targets):
 
     `requiredStatusCheckContexts` names the checks that have to pass, whether
     or not they have reported: a required context missing from the rollup is
-    the difference between 🟡 and 🛑.
+    the difference between 🟡 and 🛑. `requiresConversationResolution` rides
+    along in the same rule, and the threads in the same pull request, so 💬
+    costs no request of its own.
     """
     body = []
     for index, (slug, number) in enumerate(targets):
@@ -315,7 +365,9 @@ def required_query(targets):
         body.append(
             "p%d: repository(owner: %s, name: %s) "
             "{ pullRequest(number: %d) "
-            "{ baseRef { branchProtectionRule { requiredStatusCheckContexts } } "
+            "{ baseRef { branchProtectionRule { requiredStatusCheckContexts "
+            "requiresConversationResolution } } "
+            "reviewThreads(first: 100) { nodes { isResolved } } "
             "commits(last: 1) { nodes { commit { statusCheckRollup "
             "{ contexts(first: 100) { nodes { __typename "
             "... on CheckRun { name status conclusion startedAt completedAt isRequired(pullRequestNumber: %d) } "
@@ -347,7 +399,9 @@ def parse_required(data, targets):
         contexts = (rollup.get("contexts") or {}).get("nodes") or []
         rule = (pull.get("baseRef") or {}).get("branchProtectionRule") or {}
         expected = rule.get("requiredStatusCheckContexts") or []
-        marks[target] = required_state(contexts, expected)
+        marks[target] = required_state(contexts, expected) + (
+            conversation_block(pull),
+        )
     return marks
 
 
@@ -355,9 +409,9 @@ def decide(prs, marks, unstable=DEFAULT_UNSTABLE):
     """{(slug, branch): emoji} from the pull requests and their required-check marks.
 
     A pull request the required-check query did not answer for keeps the
-    defaults, so it loses only its ❌ and 🟡 verdicts and stays on 🛑.
+    defaults, so it loses only its ❌, 🟠, 🟡 and 💬 verdicts and stays on 🛑.
 
-    An open pull request no row of `emoji_for` matched gets no verdict at all,
+    An open pull request no row of `blocker_for` matched gets no verdict at all,
     which leaves its emoji alone rather than erasing it. `UNKNOWN` is GitHub
     asking to be asked again — it invalidates mergeability whenever the base
     branch moves, and computes it only when something requests it, so the very
@@ -368,8 +422,11 @@ def decide(prs, marks, unstable=DEFAULT_UNSTABLE):
     """
     verdicts = {}
     for pr in prs:
-        failing, running = marks.get((pr["slug"], pr.get("number")), (False, False))
+        failing, running, conversations = marks.get(
+            (pr["slug"], pr.get("number")), (False, False, False)
+        )
         pr["required_failing"], pr["required_running"] = failing, running
+        pr["conversation_block"] = conversations
         emoji = emoji_for(pr, unstable)
         if not emoji and pr.get("number") is not None and pr.get("state") == "OPEN":
             continue

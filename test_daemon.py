@@ -8,7 +8,9 @@
 #
 # Aliases p0, p1 and p2 of required_checks.json carry no `baseRef`, which is
 # also the shape a token that cannot read the base branch's protection gets.
-# p3 carries one, and one of its required contexts has yet to report.
+# p3 carries one, and one of its required contexts has yet to report. p4 is a
+# pull request whose base branch requires conversation resolution: every
+# required check has reported and passed, and one of its nine threads is open.
 #
 # lookup.json carries no `reviewDecision`, so it also covers a base branch that
 # asks for no reviews. The 👀 cases are unit tests below. Its `defaultBranchRef`
@@ -144,7 +146,9 @@ class EmojiPrecedence(unittest.TestCase):
             "⚠️",
         )
 
-    def test_failing_required_check_beats_running_and_blocked(self):
+    def test_a_failure_with_checks_still_running_is_not_settled(self):
+        # Something is already broken and the list of what to fix is still
+        # growing, so fixing it now invites a second pass.
         self.assertEqual(
             daemon.emoji_for(
                 {
@@ -154,6 +158,20 @@ class EmojiPrecedence(unittest.TestCase):
                     "rollup": "PENDING",
                     "required_failing": True,
                     "required_running": True,
+                }
+            ),
+            "🟠",
+        )
+
+    def test_a_settled_failure_beats_running_and_blocked(self):
+        self.assertEqual(
+            daemon.emoji_for(
+                {
+                    "number": 1,
+                    "state": "OPEN",
+                    "mergeStateStatus": "BLOCKED",
+                    "rollup": "PENDING",
+                    "required_failing": True,
                 }
             ),
             "❌",
@@ -280,6 +298,51 @@ class EmojiPrecedence(unittest.TestCase):
         )
 
 
+class Conversations(unittest.TestCase):
+    """💬 is the one modifier, and the token is never wider than two."""
+
+    def blocked(self, **fields):
+        pr = {
+            "number": 1,
+            "state": "OPEN",
+            "mergeStateStatus": "BLOCKED",
+            "conversation_block": True,
+        }
+        pr.update(fields)
+        return pr
+
+    def test_a_missing_review_and_an_open_thread_ask_for_both(self):
+        # Two errands for two people: the reviewer who has not looked yet, and
+        # whoever answers the threads an earlier reviewer or a bot left behind.
+        self.assertEqual(
+            daemon.emoji_for(self.blocked(reviewDecision="REVIEW_REQUIRED")), "👀💬"
+        )
+
+    def test_open_threads_alone_replace_the_unexplained_block(self):
+        # 🛑 says "blocked, and this plugin cannot say why". The threads say why.
+        self.assertEqual(daemon.emoji_for(self.blocked()), "💬")
+
+    def test_the_modifier_rides_along_with_every_blocker(self):
+        for fields, expected in (
+            ({"mergeStateStatus": "DIRTY"}, "⚠️💬"),
+            ({"required_failing": True}, "❌💬"),
+            ({"required_failing": True, "required_running": True}, "🟠💬"),
+            ({"required_running": True}, "🟡💬"),
+        ):
+            self.assertEqual(daemon.emoji_for(self.blocked(**fields)), expected, fields)
+
+    def test_a_draft_swallows_it_like_every_other_blocker(self):
+        self.assertEqual(daemon.emoji_for(self.blocked(isDraft=True)), "📝")
+
+    def test_an_unknown_merge_state_is_still_empty(self):
+        # An empty verdict keeps its emptiness: UNKNOWN has to go on falling
+        # through to whatever the row already shows.
+        self.assertEqual(daemon.emoji_for(self.blocked(mergeStateStatus="UNKNOWN")), "")
+
+    def test_nothing_is_appended_without_open_conversations(self):
+        self.assertEqual(daemon.emoji_for(self.blocked(conversation_block=False)), "🛑")
+
+
 class RequiredChecks(unittest.TestCase):
     def contexts(self, alias):
         data = fixture("required_checks.json")["data"]
@@ -289,9 +352,37 @@ class RequiredChecks(unittest.TestCase):
         return rollup["contexts"]["nodes"]
 
     def expected(self, alias):
-        pull = fixture("required_checks.json")["data"][alias]["pullRequest"]
-        rule = (pull.get("baseRef") or {}).get("branchProtectionRule") or {}
+        rule = (self.pull(alias).get("baseRef") or {}).get("branchProtectionRule") or {}
         return rule.get("requiredStatusCheckContexts") or []
+
+    def pull(self, alias):
+        return fixture("required_checks.json")["data"][alias]["pullRequest"]
+
+    def test_recorded_open_thread_blocks_when_the_branch_asks_for_resolution(self):
+        self.assertIs(daemon.conversation_block(self.pull("p4")), True)
+
+    def test_resolved_threads_do_not_block(self):
+        pull = self.pull("p4")
+        for thread in pull["reviewThreads"]["nodes"]:
+            thread["isResolved"] = True
+        self.assertIs(daemon.conversation_block(pull), False)
+
+    def test_open_threads_do_not_block_a_branch_that_never_asks(self):
+        # Unresolved threads are ordinary where nobody has to resolve them.
+        pull = self.pull("p4")
+        rule = pull["baseRef"]["branchProtectionRule"]
+        rule["requiresConversationResolution"] = False
+        self.assertIs(daemon.conversation_block(pull), False)
+
+    def test_a_protection_rule_the_token_cannot_read_does_not_block(self):
+        # The same null rule a repository governed by rulesets answers with.
+        self.assertIs(daemon.conversation_block(self.pull("p0")), False)
+
+    def test_recorded_pull_request_with_an_open_thread_has_no_check_to_blame(self):
+        self.assertEqual(
+            daemon.required_state(self.contexts("p4"), self.expected("p4")),
+            (False, False),
+        )
 
     def test_recorded_optional_failure_is_not_a_failure(self):
         # p0: three required checks passed, an optional one was CANCELLED.
@@ -462,8 +553,31 @@ class Lookup(unittest.TestCase):
         ]
         data = {"p0": fixture("required_checks.json")["data"]["p3"]}
         marks = daemon.parse_required(data, [(APP, 104)])
-        self.assertEqual(marks, {(APP, 104): (False, True)})
+        self.assertEqual(marks, {(APP, 104): (False, True, False)})
         self.assertEqual(daemon.decide(prs, marks)[(APP, "feature/c-blocked")], "🟡")
+
+    def test_recorded_missing_review_and_open_thread_read_together(self):
+        # The whole path for the recorded pull request of p4, the shape GitHub
+        # sums up as "All comments must be resolved" and "At least 1 approving
+        # review is required": every required check reported and passed, so
+        # neither errand hides the other.
+        prs = [
+            {
+                "slug": APP,
+                "branch": "feature/i-conversations",
+                "number": 106,
+                "state": "OPEN",
+                "mergeStateStatus": "BLOCKED",
+                "rollup": "FAILURE",
+                "reviewDecision": "REVIEW_REQUIRED",
+            }
+        ]
+        data = {"p0": fixture("required_checks.json")["data"]["p4"]}
+        marks = daemon.parse_required(data, [(APP, 106)])
+        self.assertEqual(marks, {(APP, 106): (False, False, True)})
+        self.assertEqual(
+            daemon.decide(prs, marks)[(APP, "feature/i-conversations")], "👀💬"
+        )
 
     def test_an_unknown_merge_state_keeps_the_last_emoji(self):
         # GitHub invalidates mergeability whenever the base branch moves and
@@ -590,9 +704,18 @@ class Queries(unittest.TestCase):
     def test_required_query_asks_what_the_base_branch_requires(self):
         query = daemon.required_query([(APP, 104)])
         self.assertIn(
-            "baseRef { branchProtectionRule { requiredStatusCheckContexts } }", query
+            "baseRef { branchProtectionRule { requiredStatusCheckContexts "
+            "requiresConversationResolution } }",
+            query,
         )
         # One selection set on `pullRequest`, not two.
+        self.assertEqual(query.count("pullRequest(number: 104)"), 1)
+
+    def test_required_query_asks_for_the_review_threads(self):
+        # Same request and the same selection set as the required checks, so
+        # 💬 costs no round trip of its own.
+        query = daemon.required_query([(APP, 104)])
+        self.assertIn("reviewThreads(first: 100) { nodes { isResolved } }", query)
         self.assertEqual(query.count("pullRequest(number: 104)"), 1)
 
     def test_both_queries_are_balanced(self):

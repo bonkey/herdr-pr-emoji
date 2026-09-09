@@ -1,11 +1,11 @@
 # herdr-pr-emoji
 
-[Herdr](https://herdr.dev) plugin: one emoji per sidebar row with the pull request state of
-the workspace's branch. Built to replace `mergr` for that purpose, with one specific
+[Herdr](https://herdr.dev) plugin: the pull request state of the workspace's branch, as one
+emoji per sidebar row. Built to replace `mergr` for that purpose, with one specific
 behaviour: **a PR whose only failing checks are non-required reads as mergeable**, the way
 GitHub itself treats it.
 
-    ✅ bonkey/purchase-to-unlock     🟡 bonkey/ios-27-siri-ai-intents     👀 bonkey/apple-ads-interface
+    ✅ bonkey/purchase-to-unlock     🟡 bonkey/ios-27-siri-ai-intents     👀💬 bonkey/apple-ads-interface
 
 ## Install
 
@@ -45,7 +45,8 @@ The decisive fields are GitHub's `mergeStateStatus` and `reviewDecision`, plus w
 | `state == CLOSED` (closed unmerged), unless the branch is the repository's default | 🚪 |
 | `isDraft` | 📝 |
 | `mergeStateStatus == DIRTY` (merge conflict) | ⚠️ |
-| the newest attempt of a **required** check failed (`isRequired` on a failing check run or status) | ❌ |
+| the newest attempt of a **required** check failed (`isRequired` on a failing check run or status) **while other required checks still run** | 🟠 |
+| the same failure with every required check settled | ❌ |
 | checks still running (`statusCheckRollup.state == PENDING`, or a required check queued, in progress, or yet to report at all) | 🟡 |
 | `reviewDecision == REVIEW_REQUIRED` (waiting for a reviewer) | 👀 |
 | `mergeStateStatus == BLOCKED` (not mergeable for some other reason) | 🛑 |
@@ -76,8 +77,45 @@ a reviewer is also pointless while the checks can still turn red.
 review is a fact of its own, and GitHub reports it whether the merge state says `BLOCKED`,
 `BEHIND` or `UNSTABLE` — the last two fall through to ✅ further down, so gating 👀 on
 `BLOCKED` would call an unreviewed pull request mergeable. What reaches 🛑 is therefore a
-block that is neither a failed check, nor running CI, nor a missing review: a stale required
-context, an unsatisfied deploy gate, or a base branch that asks for no reviews at all.
+block that is neither a failed check, nor running CI, nor a missing review, nor an open
+conversation: a stale required context, an unsatisfied deploy gate, or a base branch that
+asks for no reviews at all.
+
+🟠 splits ❌ in two. Both mean a required check has failed, and the difference is whether
+the list of what to fix is complete: with ❌ every required check has settled, with 🟠
+others are still running and a fix now invites a second pass. GitHub reports both facts
+independently, so the split costs nothing — `isRequired` already answers it.
+
+## The 💬 modifier
+
+💬 is the one emoji that joins another instead of replacing it, so the token is never wider
+than two:
+
+| Reads | Means |
+|---|---|
+| 👀💬 | nobody has reviewed it **and** a conversation is open |
+| ❌💬, 🟠💬, 🟡💬, ⚠️💬 | the blocker on the left, and a conversation is open |
+| 💬 | conversations are the only thing left |
+
+A missing review and an unresolved conversation are two errands for two people. The
+reviewer who has not looked yet is rarely the person who answers the threads an earlier
+reviewer or a review bot left behind, and the author usually answers those. One emoji
+cannot ask for both, so this one rides along.
+
+Where 💬 stands alone it replaces 🛑 rather than joining it: 🛑 means *blocked, and this
+plugin cannot say why*, and open conversations say why. A draft swallows 💬 the way it
+swallows every other blocker, and an empty verdict keeps its emptiness — `UNKNOWN` goes on
+falling through to whatever the row already shows.
+
+An open thread only counts where the base branch asks for it. `requiresConversationResolution`
+sits in the same `branchProtectionRule` the plugin already reads for
+`requiredStatusCheckContexts`, and the threads in the same pull request, so 💬 costs no
+extra request. Where the token cannot read the protection rule — no permission, or a
+repository governed by rulesets rather than branch protection — the rule is null and the
+pull request reads 🛑, the same fallback the required contexts get. Only the first hundred
+threads are asked for; past that the answer is 🛑 again, never a 💬 the pull request has
+not been shown to have earned. GitHub counts an outdated thread as unresolved, so
+`isOutdated` decides nothing.
 
 A re-run check keeps its earlier attempts in the rollup, so only the newest attempt of each
 check name decides ❌, the way branch protection decides it. A missing review also arrives as
@@ -108,9 +146,10 @@ One long-lived loop, started with the server. Each cycle:
 3. **One GraphQL request for every repository and branch at once**
    (`pullRequests(headRefName:, last: 1)` aliased per branch), so the answer is exact even
    for merged branches. A second request, only for open PRs that report a failure or are
-   `BLOCKED`, asks each check `isRequired(pullRequestNumber:)` and the base branch for
-   `requiredStatusCheckContexts`, to tell ❌ from 🟡 from 🛑. Two calls per cycle, however
-   many repositories are open.
+   `BLOCKED`, asks each check `isRequired(pullRequestNumber:)`, the base branch for
+   `requiredStatusCheckContexts` and `requiresConversationResolution`, and the pull request
+   for its review threads, to tell 🟠 from ❌ from 🟡 from 💬 from 🛑. Two calls per cycle,
+   however many repositories are open.
 4. `report-metadata` on the workspace and each of its panes, with a TTL of three
    intervals: if the daemon dies, the emoji disappears instead of going stale.
 
@@ -122,7 +161,7 @@ nothing: every repository and branch the answer does cover is used, and the erro
 in the log with its path. A branch GitHub did not answer for keeps the emoji it already
 shows — the token carries a TTL of three intervals, so an emoji nobody refreshes disappears
 on its own, and one failed request no longer blanks every workspace. A pull request whose
-required checks went unanswered loses only its ❌ and 🟡 verdicts and stays on 🛑. A
+second request went unanswered loses only its 🟠, ❌, 🟡 and 💬 verdicts and stays on 🛑. A
 repository the token cannot see (a SAML-protected organisation the token is not authorised
 for, a private repository) shows nothing.
 
@@ -160,7 +199,8 @@ tests over GraphQL responses recorded from real pull requests, under `fixtures/`
 
 ## Non-goals
 
-Titles, review counts, several rows per space, opening PRs. One emoji per row.
+Titles, review counts, several rows per space, opening PRs. One emoji per row, and 💬 after
+it when conversations are open too — no third slot.
 
 ## License
 
