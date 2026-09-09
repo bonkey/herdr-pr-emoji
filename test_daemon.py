@@ -21,6 +21,7 @@ import json
 import os
 import tempfile
 import unittest
+from unittest import mock
 
 import daemon
 
@@ -747,6 +748,60 @@ class Remotes(unittest.TestCase):
             "",
         ):
             self.assertEqual(daemon.slug_from_url(url), "", url)
+
+
+class Directories(unittest.TestCase):
+    """Where the pid file, the log and config.toml live."""
+
+    def state(self):
+        return daemon.plugin_dir(
+            "HERDR_PLUGIN_STATE_DIR", "XDG_STATE_HOME", "~/.local/state"
+        )
+
+    def config(self):
+        return daemon.plugin_dir(
+            "HERDR_PLUGIN_CONFIG_DIR", "XDG_CONFIG_HOME", "~/.config", "config"
+        )
+
+    def test_the_environment_the_server_passes_wins(self):
+        passed = {
+            "HERDR_PLUGIN_STATE_DIR": "/run/herdr/state",
+            "HERDR_PLUGIN_CONFIG_DIR": "/run/herdr/config",
+            "XDG_STATE_HOME": "/elsewhere/state",
+            "XDG_CONFIG_HOME": "/elsewhere/config",
+        }
+        with mock.patch.dict(os.environ, passed, clear=True):
+            self.assertEqual(self.state(), "/run/herdr/state")
+            self.assertEqual(self.config(), "/run/herdr/config")
+
+    def test_a_hand_launched_daemon_finds_the_same_directories(self):
+        with mock.patch.dict(
+            os.environ, {"HOME": "/home/dev", "TMPDIR": "/tmp/somewhere"}, clear=True
+        ):
+            self.assertEqual(
+                self.state(), "/home/dev/.local/state/herdr/plugins/bonkey.pr-emoji"
+            )
+            self.assertEqual(
+                self.config(), "/home/dev/.config/herdr/plugins/config/bonkey.pr-emoji"
+            )
+
+    def test_the_xdg_base_directories_move_them(self):
+        moved = {
+            "HOME": "/home/dev",
+            "XDG_STATE_HOME": "/var/state",
+            "XDG_CONFIG_HOME": "/var/config",
+        }
+        with mock.patch.dict(os.environ, moved, clear=True):
+            self.assertEqual(self.state(), "/var/state/herdr/plugins/bonkey.pr-emoji")
+            self.assertEqual(
+                self.config(), "/var/config/herdr/plugins/config/bonkey.pr-emoji"
+            )
+
+    def test_the_daemon_reads_and_writes_where_it_resolves(self):
+        self.assertEqual(daemon.STATE, self.state())
+        self.assertEqual(daemon.LOG, os.path.join(daemon.STATE, "daemon.log"))
+        self.assertEqual(daemon.PIDFILE, os.path.join(daemon.STATE, "daemon.pid"))
+        self.assertEqual(daemon.CONFIG, os.path.join(self.config(), "config.toml"))
 
 
 class Config(unittest.TestCase):

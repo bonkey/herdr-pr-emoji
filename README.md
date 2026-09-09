@@ -171,14 +171,14 @@ polls in parallel with the one the server starts.
 
 ## Configuration
 
-`$(herdr plugin config-dir bonkey.pr-emoji)/config.toml` (outside the plugin tree, survives
-reinstalls). See `config.example.toml`.
+`$(herdr plugin config-dir bonkey.pr-emoji)/config.toml`, i.e. `~/.config/herdr/plugins/config/bonkey.pr-emoji/config.toml` (outside the plugin tree, survives reinstalls). See `config.example.toml`.
 
     refreshIntervalSeconds = 120   # floor: 60
     unstable = "ok"                # UNSTABLE: "ok" 🆗, "pass" ✅, "warn" ⚠️
 
-Logs: `daemon.log` under `$(herdr plugin state-dir)`, i.e.
-`~/.local/state/herdr/plugins/bonkey.pr-emoji/daemon.log`.
+Logs and the pid file: `~/.local/state/herdr/plugins/bonkey.pr-emoji/`, so the log is `~/.local/state/herdr/plugins/bonkey.pr-emoji/daemon.log`.
+
+The server passes both directories in `HERDR_PLUGIN_CONFIG_DIR` and `HERDR_PLUGIN_STATE_DIR`, and a daemon started by hand resolves the same two paths itself, under `$XDG_CONFIG_HOME` and `$XDG_STATE_HOME` where those are set. So a hand-launched copy reads the same `config.toml` and finds the running daemon in the same pid file.
 
 ## Development
 

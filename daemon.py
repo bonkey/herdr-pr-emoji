@@ -26,10 +26,29 @@ import time
 SOURCE = "bonkey.pr-emoji"
 TOKEN = "pr_emoji"
 HERDR = os.environ.get("HERDR_BIN_PATH") or "herdr"
-STATE = os.environ.get("HERDR_PLUGIN_STATE_DIR") or os.path.join(
-    os.environ.get("TMPDIR") or "/tmp", "pr-emoji"
+
+
+def plugin_dir(passed, home, fallback, *parts):
+    """The plugin directory herdr passes in the environment, or herdr's own.
+
+    The server exports HERDR_PLUGIN_STATE_DIR and HERDR_PLUGIN_CONFIG_DIR for the
+    daemon it starts. A daemon launched by hand resolves the same paths from the
+    XDG base directories, so both copies share one pid file and one config file.
+    """
+    return os.environ.get(passed) or os.path.join(
+        os.environ.get(home) or os.path.expanduser(fallback),
+        "herdr",
+        "plugins",
+        *parts,
+        SOURCE,
+    )
+
+
+STATE = plugin_dir("HERDR_PLUGIN_STATE_DIR", "XDG_STATE_HOME", "~/.local/state")
+CONFIG = os.path.join(
+    plugin_dir("HERDR_PLUGIN_CONFIG_DIR", "XDG_CONFIG_HOME", "~/.config", "config"),
+    "config.toml",
 )
-CONFIG = os.path.join(os.environ.get("HERDR_PLUGIN_CONFIG_DIR") or STATE, "config.toml")
 LOG = os.path.join(STATE, "daemon.log")
 PIDFILE = os.path.join(STATE, "daemon.pid")
 LOG_LIMIT = 1000000
