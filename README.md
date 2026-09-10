@@ -204,11 +204,44 @@ four. Set `icons = "emoji"` for the emoji this README names, which need no parti
 The prose below and the table above name the emoji throughout, because a Nerd Font glyph is
 a private-use codepoint that cannot be read on a page. Both sets say the same things.
 
-The Octicons are monochrome, and they inherit whatever colour the row already has. Nothing
-this plugin can do changes that: `report-metadata` takes a plain `--token NAME=VALUE`, and
-herdr strips control bytes from the value, so an ANSI colour sequence reaches the sidebar as
-the literal text `[32m`. Colour for a token would have to come from herdr. Where telling 🟠
-from ❌ from 🟡 at a glance matters more than width, `icons = "emoji"` keeps the colours.
+The Octicons are monochrome, and the plugin never styles what it publishes: `report-metadata`
+takes a plain `--token NAME=VALUE`, and herdr strips control bytes from the value, so an ANSI
+sequence would arrive as the literal text `[32m`. **The colour is herdr's to apply**, and it
+does: a sidebar cell takes up to sixteen `rules`, matched against the token's value in order,
+and the first match wins. That is one rule per state, in the order of the table above, with
+one to spare.
+
+```toml
+[ui.sidebar.spaces]
+rows = [
+  ["state_icon", { token = "$pr_emoji", rules = [
+      { contains = "", fg = "#8b949e" },  # draft
+      { contains = "", fg = "#1f6feb" },  # queued to merge
+      { contains = "", fg = "#db6d28" },  # conflict
+      { contains = "", fg = "#f85149" },  # required check failed, others still running
+      { contains = "", fg = "#f85149" },  # required check failed, all settled
+      { contains = "", fg = "#d29922" },  # checks running
+      { contains = "", fg = "#79c0ff" },  # review required
+      { contains = "", fg = "#db61a2" },  # thrown out of the merge queue
+      { contains = "", fg = "#ff7b72" },  # blocked
+      { contains = "", fg = "#7ee787" },  # only optional checks failing
+      { contains = "", fg = "#3fb950" },  # mergeable
+      { contains = "", fg = "#a371f7" },  # merged
+      { contains = "", fg = "#6e7681" },  # closed
+      { contains = "", fg = "#6e7681" },  # no pull request
+      { contains = "", fg = "#39c5cf" },  # conversation open
+  ] }, "workspace"],
+  ["branch", "git_status"],
+]
+```
+
+`contains` rather than `equals`, because a verdict that carries 💬 is two glyphs: the blocker
+on the left still colours the cell, and a 💬 standing alone falls through to the last rule.
+The rules are ordered the way `blocker_for` decides, so the emoji and its colour always agree
+about which state won.
+
+The colours above are a starting point, not a decision this plugin makes: they live in your
+config, so pick your own. The emoji set needs no rules — it carries its colour already.
 
 ## How it polls
 
