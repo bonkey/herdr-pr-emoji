@@ -6,3 +6,9 @@ refreshIntervalSeconds = 120
 # What a PR with only non-required checks failing (GitHub mergeStateStatus UNSTABLE) shows:
 #   "ok" -> 🆗 (default)   "pass" -> ✅   "warn" -> ⚠️
 unstable = "ok"
+
+# Which glyphs the row uses:
+#   "nerd"  -> Octicons from a Nerd Font (default), one cell each
+#   "emoji" -> the emoji this README names, two cells each
+# A Nerd Font has to be the terminal's font for "nerd" to render.
+icons = "nerd"

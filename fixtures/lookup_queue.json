@@ -1,0 +1,89 @@
+{
+  "data": {
+    "r0": {
+      "defaultBranchRef": { "name": "main" },
+      "b0": {
+        "nodes": [
+          {
+            "number": 110,
+            "isDraft": false,
+            "state": "OPEN",
+            "mergeStateStatus": "UNKNOWN",
+            "reviewDecision": "APPROVED",
+            "isInMergeQueue": true,
+            "timelineItems": { "nodes": [ { "__typename": "AddedToMergeQueueEvent" } ] },
+            "commits": { "nodes": [ { "commit": { "statusCheckRollup": { "state": "SUCCESS" } } } ] }
+          }
+        ]
+      },
+      "b1": {
+        "nodes": [
+          {
+            "number": 111,
+            "isDraft": false,
+            "state": "OPEN",
+            "mergeStateStatus": "CLEAN",
+            "reviewDecision": "APPROVED",
+            "isInMergeQueue": false,
+            "timelineItems": {
+              "nodes": [
+                { "__typename": "RemovedFromMergeQueueEvent", "reason": "failed_checks" }
+              ]
+            },
+            "commits": { "nodes": [ { "commit": { "statusCheckRollup": { "state": "SUCCESS" } } } ] }
+          }
+        ]
+      },
+      "b2": {
+        "nodes": [
+          {
+            "number": 112,
+            "isDraft": false,
+            "state": "OPEN",
+            "mergeStateStatus": "DIRTY",
+            "reviewDecision": "APPROVED",
+            "isInMergeQueue": false,
+            "timelineItems": {
+              "nodes": [
+                { "__typename": "RemovedFromMergeQueueEvent", "reason": "merge_conflict" }
+              ]
+            },
+            "commits": { "nodes": [ { "commit": { "statusCheckRollup": { "state": "SUCCESS" } } } ] }
+          }
+        ]
+      },
+      "b3": {
+        "nodes": [
+          {
+            "number": 113,
+            "isDraft": false,
+            "state": "MERGED",
+            "mergeStateStatus": "UNKNOWN",
+            "reviewDecision": "APPROVED",
+            "isInMergeQueue": false,
+            "timelineItems": {
+              "nodes": [
+                { "__typename": "RemovedFromMergeQueueEvent", "reason": "merged" }
+              ]
+            },
+            "commits": { "nodes": [ { "commit": { "statusCheckRollup": { "state": "SUCCESS" } } } ] }
+          }
+        ]
+      },
+      "b4": {
+        "nodes": [
+          {
+            "number": 114,
+            "isDraft": false,
+            "state": "OPEN",
+            "mergeStateStatus": "CLEAN",
+            "reviewDecision": "APPROVED",
+            "isInMergeQueue": false,
+            "timelineItems": { "nodes": [ { "__typename": "PullRequestCommit" } ] },
+            "commits": { "nodes": [ { "commit": { "statusCheckRollup": { "state": "SUCCESS" } } } ] }
+          }
+        ]
+      }
+    }
+  }
+}
