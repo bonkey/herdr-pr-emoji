@@ -176,6 +176,40 @@ GitHub marked it, so a check whose `isRequired` says false while branch protecti
 the same name cannot pin the emoji to 🟡. Where the token cannot read the branch protection
 rule, the verdict rests on the checks that did report.
 
+## Two icon sets
+
+The rows are drawn with Octicons from a Nerd Font by default — GitHub's own icon language,
+and one of them is drawn for the merge queue. They are one cell wide where an emoji is two,
+so a row is half the width and a token that carries 💬 as well is two cells rather than
+four. Set `icons = "emoji"` for the emoji this README names, which need no particular font.
+
+| State | Nerd Font | Emoji |
+|---|---|---|
+| no PR | `oct-question` | ❔ |
+| merged | `oct-git_merge` | 🟣 |
+| closed | `oct-git_pull_request_closed` | 🚪 |
+| draft | `oct-git_pull_request_draft` | 📝 |
+| queued to merge | `oct-git_merge_queue` | 🚂 |
+| conflict | `oct-alert` | ⚠️ |
+| required check failed, others running | `oct-x_circle` | 🟠 |
+| required check failed, all settled | `oct-x_circle_fill` | ❌ |
+| checks running | `oct-sync` | 🟡 |
+| review required | `oct-eye` | 👀 |
+| thrown out of the queue | `oct-sign_out` | 🪃 |
+| blocked | `oct-no_entry` | 🛑 |
+| only optional checks failing | `oct-check` | 🆗 |
+| mergeable | `oct-check_circle_fill` | ✅ |
+| conversation open | `oct-comment_discussion` | 💬 |
+
+The prose below and the table above name the emoji throughout, because a Nerd Font glyph is
+a private-use codepoint that cannot be read on a page. Both sets say the same things.
+
+The Octicons are monochrome, and they inherit whatever colour the row already has. Nothing
+this plugin can do changes that: `report-metadata` takes a plain `--token NAME=VALUE`, and
+herdr strips control bytes from the value, so an ANSI colour sequence reaches the sidebar as
+the literal text `[32m`. Colour for a token would have to come from herdr. Where telling 🟠
+from ❌ from 🟡 at a glance matters more than width, `icons = "emoji"` keeps the colours.
+
 ## How it polls
 
 One long-lived loop, started with the server. Each cycle:
@@ -219,6 +253,7 @@ polls in parallel with the one the server starts.
 
     refreshIntervalSeconds = 120   # floor: 60
     unstable = "ok"                # UNSTABLE: "ok" 🆗, "pass" ✅, "warn" ⚠️
+    icons = "nerd"                 # "nerd" Octicons (default), or "emoji"
 
 Logs and the pid file: `~/.local/state/herdr/plugins/bonkey.pr-emoji/`, so the log is `~/.local/state/herdr/plugins/bonkey.pr-emoji/daemon.log`.
 

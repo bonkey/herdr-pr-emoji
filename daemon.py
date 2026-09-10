@@ -85,8 +85,29 @@ EMOJI = {
     "mergeable": "✅",
     "conversation": "💬",
 }
-ICON_SETS = {"emoji": EMOJI}
-DEFAULT_ICON_SET = "emoji"
+# Octicons, GitHub's own icon language, as a Nerd Font carries them. One of
+# them is drawn for the merge queue. Codepoints from the Nerd Fonts glyph
+# table rather than from memory; every one is a single cell, where an emoji is
+# two, so a row of these is half the width.
+NERD = {
+    "no_pr": "\uF420",  # oct-question
+    "merged": "\uF419",  # oct-git_merge
+    "closed": "\uF4DC",  # oct-git_pull_request_closed
+    "draft": "\uF4DD",  # oct-git_pull_request_draft
+    "queued": "\uF4DB",  # oct-git_merge_queue
+    "conflict": "\uF421",  # oct-alert
+    "failing_growing": "\uF52F",  # oct-x_circle
+    "failing": "\uF530",  # oct-x_circle_fill
+    "running": "\uF46A",  # oct-sync
+    "review": "\uF441",  # oct-eye
+    "ejected": "\uF426",  # oct-sign_out
+    "blocked": "\uF4F4",  # oct-no_entry
+    "unstable": "\uF42E",  # oct-check
+    "mergeable": "\uF4A4",  # oct-check_circle_fill
+    "conversation": "\uF442",  # oct-comment_discussion
+}
+ICON_SETS = {"emoji": EMOJI, "nerd": NERD}
+DEFAULT_ICON_SET = "nerd"
 
 
 def icon_set(name, unstable):
@@ -136,12 +157,12 @@ def run(argv, timeout):
 
 def read_config(path):
     """(interval, icons) from config.toml, defaults for anything it does not set."""
-    interval, unstable = DEFAULT_INTERVAL, DEFAULT_UNSTABLE
+    interval, unstable, icons = DEFAULT_INTERVAL, DEFAULT_UNSTABLE, DEFAULT_ICON_SET
     try:
         with open(path, "r", encoding="utf-8") as handle:
             text = handle.read()
     except OSError:
-        return interval, icon_set(DEFAULT_ICON_SET, unstable)
+        return interval, icon_set(icons, unstable)
     found = re.search(
         r"^[ \t]*refreshIntervalSeconds[ \t]*=[ \t]*(\d+)", text, re.MULTILINE
     )
@@ -156,7 +177,10 @@ def read_config(path):
     found = re.search(r'^[ \t]*unstable[ \t]*=[ \t]*"([a-z]*)"', text, re.MULTILINE)
     if found and found.group(1) in ("ok", "pass", "warn"):
         unstable = found.group(1)
-    return interval, icon_set(DEFAULT_ICON_SET, unstable)
+    found = re.search(r'^[ \t]*icons[ \t]*=[ \t]*"([a-z]*)"', text, re.MULTILINE)
+    if found and found.group(1) in ICON_SETS:
+        icons = found.group(1)
+    return interval, icon_set(icons, unstable)
 
 
 # ---------------------------------------------------------------- pure decisions

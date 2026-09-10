@@ -62,6 +62,20 @@ QUEUE_PAIRS = [
 ]
 
 
+# Most tests below name the emoji, so they ask for that set by name. The
+# daemon's own default is the Nerd Font one, whose glyphs are private-use
+# codepoints that no assertion could be read from.
+EMOJI = daemon.EMOJI
+
+
+def emoji_for(pr, icons=EMOJI):
+    return daemon.emoji_for(pr, icons)
+
+
+def decide(prs, marks, icons=EMOJI):
+    return daemon.decide(prs, marks, icons)
+
+
 def fixture(name):
     with open(os.path.join(FIXTURES, name), "r", encoding="utf-8") as handle:
         return json.load(handle)
@@ -87,11 +101,11 @@ class EmojiPrecedence(unittest.TestCase):
 
     def test_no_pull_request_asks(self):
         # Not empty: an empty answer means a row with nothing to say at all.
-        self.assertEqual(daemon.emoji_for({"number": None}), "❔")
+        self.assertEqual(emoji_for({"number": None}), "❔")
 
     def test_merged_beats_everything(self):
         self.assertEqual(
-            daemon.emoji_for(
+            emoji_for(
                 {
                     "number": 1,
                     "state": "MERGED",
@@ -105,7 +119,7 @@ class EmojiPrecedence(unittest.TestCase):
 
     def test_closed_unmerged_shuts(self):
         self.assertEqual(
-            daemon.emoji_for(
+            emoji_for(
                 {"number": 1, "state": "CLOSED", "mergeStateStatus": "DIRTY"}
             ),
             "🚪",
@@ -115,7 +129,7 @@ class EmojiPrecedence(unittest.TestCase):
         # The trunk keeps whatever pull request last carried its name, so a
         # door there would never go away.
         self.assertEqual(
-            daemon.emoji_for(
+            emoji_for(
                 {"number": 1, "state": "CLOSED", "on_default_branch": True}
             ),
             "",
@@ -125,7 +139,7 @@ class EmojiPrecedence(unittest.TestCase):
         # Only the door is suppressed: a pull request open from the trunk is
         # real work and reads like any other.
         self.assertEqual(
-            daemon.emoji_for(
+            emoji_for(
                 {
                     "number": 1,
                     "state": "OPEN",
@@ -139,7 +153,7 @@ class EmojiPrecedence(unittest.TestCase):
 
     def test_draft_beats_conflict(self):
         self.assertEqual(
-            daemon.emoji_for(
+            emoji_for(
                 {
                     "number": 1,
                     "state": "OPEN",
@@ -152,7 +166,7 @@ class EmojiPrecedence(unittest.TestCase):
 
     def test_conflict_beats_failing_check(self):
         self.assertEqual(
-            daemon.emoji_for(
+            emoji_for(
                 {
                     "number": 1,
                     "state": "OPEN",
@@ -167,7 +181,7 @@ class EmojiPrecedence(unittest.TestCase):
         # Something is already broken and the list of what to fix is still
         # growing, so fixing it now invites a second pass.
         self.assertEqual(
-            daemon.emoji_for(
+            emoji_for(
                 {
                     "number": 1,
                     "state": "OPEN",
@@ -182,7 +196,7 @@ class EmojiPrecedence(unittest.TestCase):
 
     def test_a_settled_failure_beats_running_and_blocked(self):
         self.assertEqual(
-            daemon.emoji_for(
+            emoji_for(
                 {
                     "number": 1,
                     "state": "OPEN",
@@ -196,7 +210,7 @@ class EmojiPrecedence(unittest.TestCase):
 
     def test_running_required_check_beats_blocked(self):
         self.assertEqual(
-            daemon.emoji_for(
+            emoji_for(
                 {
                     "number": 1,
                     "state": "OPEN",
@@ -210,7 +224,7 @@ class EmojiPrecedence(unittest.TestCase):
 
     def test_pending_rollup_runs(self):
         self.assertEqual(
-            daemon.emoji_for(
+            emoji_for(
                 {
                     "number": 1,
                     "state": "OPEN",
@@ -223,7 +237,7 @@ class EmojiPrecedence(unittest.TestCase):
 
     def test_review_required_beats_blocked(self):
         self.assertEqual(
-            daemon.emoji_for(
+            emoji_for(
                 {
                     "number": 1,
                     "state": "OPEN",
@@ -240,7 +254,7 @@ class EmojiPrecedence(unittest.TestCase):
         # 👀 on BLOCKED would call an unreviewed pull request mergeable.
         for status in ("BEHIND", "UNSTABLE", "UNKNOWN", "HAS_HOOKS"):
             self.assertEqual(
-                daemon.emoji_for(
+                emoji_for(
                     {
                         "number": 1,
                         "state": "OPEN",
@@ -255,7 +269,7 @@ class EmojiPrecedence(unittest.TestCase):
     def test_running_checks_beat_review_required(self):
         # Chasing a reviewer is pointless while the checks can still turn red.
         self.assertEqual(
-            daemon.emoji_for(
+            emoji_for(
                 {
                     "number": 1,
                     "state": "OPEN",
@@ -269,7 +283,7 @@ class EmojiPrecedence(unittest.TestCase):
 
     def test_approved_but_still_blocked_stops(self):
         self.assertEqual(
-            daemon.emoji_for(
+            emoji_for(
                 {
                     "number": 1,
                     "state": "OPEN",
@@ -282,7 +296,7 @@ class EmojiPrecedence(unittest.TestCase):
 
     def test_blocked(self):
         self.assertEqual(
-            daemon.emoji_for(
+            emoji_for(
                 {"number": 1, "state": "OPEN", "mergeStateStatus": "BLOCKED"}
             ),
             "🛑",
@@ -290,14 +304,14 @@ class EmojiPrecedence(unittest.TestCase):
 
     def test_unstable_reads_ok_by_default_and_follows_the_setting(self):
         pr = {"number": 1, "state": "OPEN", "mergeStateStatus": "UNSTABLE"}
-        self.assertEqual(daemon.emoji_for(pr), "🆗")
-        self.assertEqual(daemon.emoji_for(pr, daemon.icon_set("emoji", "pass")), "✅")
-        self.assertEqual(daemon.emoji_for(pr, daemon.icon_set("emoji", "warn")), "⚠️")
+        self.assertEqual(emoji_for(pr), "🆗")
+        self.assertEqual(emoji_for(pr, daemon.icon_set("emoji", "pass")), "✅")
+        self.assertEqual(emoji_for(pr, daemon.icon_set("emoji", "warn")), "⚠️")
 
     def test_mergeable(self):
         for status in ("CLEAN", "BEHIND", "HAS_HOOKS"):
             self.assertEqual(
-                daemon.emoji_for(
+                emoji_for(
                     {"number": 1, "state": "OPEN", "mergeStateStatus": status}
                 ),
                 "✅",
@@ -308,7 +322,7 @@ class EmojiPrecedence(unittest.TestCase):
     # what it shows; see Lookup below.
     def test_unknown_status_is_empty(self):
         self.assertEqual(
-            daemon.emoji_for(
+            emoji_for(
                 {"number": 1, "state": "OPEN", "mergeStateStatus": "UNKNOWN"}
             ),
             "",
@@ -319,7 +333,7 @@ class EmojiPrecedence(unittest.TestCase):
         # Everything the pull request still reports is the queue's business:
         # if any of it matters, the queue throws it out and 🪃 says so.
         self.assertEqual(
-            daemon.emoji_for(
+            emoji_for(
                 {
                     "number": 1,
                     "state": "OPEN",
@@ -334,7 +348,7 @@ class EmojiPrecedence(unittest.TestCase):
 
     def test_a_draft_cannot_be_queued(self):
         self.assertEqual(
-            daemon.emoji_for(
+            emoji_for(
                 {"number": 1, "state": "OPEN", "isDraft": True, "in_merge_queue": True}
             ),
             "📝",
@@ -343,7 +357,7 @@ class EmojiPrecedence(unittest.TestCase):
     def test_merged_beats_the_queue_that_merged_it(self):
         # Both facts arrive in one response, and the merge is the later one.
         self.assertEqual(
-            daemon.emoji_for(
+            emoji_for(
                 {"number": 1, "state": "MERGED", "in_merge_queue": True}
             ),
             "🟣",
@@ -354,7 +368,7 @@ class EmojiPrecedence(unittest.TestCase):
         # own checks are green and every other rung is silent. Without 🪃 this
         # reads ✅ about a pull request nothing is going to merge.
         self.assertEqual(
-            daemon.emoji_for(
+            emoji_for(
                 {
                     "number": 1,
                     "state": "OPEN",
@@ -367,7 +381,7 @@ class EmojiPrecedence(unittest.TestCase):
 
     def test_an_ejection_explains_a_block(self):
         self.assertEqual(
-            daemon.emoji_for(
+            emoji_for(
                 {
                     "number": 1,
                     "state": "OPEN",
@@ -390,12 +404,12 @@ class EmojiPrecedence(unittest.TestCase):
         ):
             pr = {"number": 1, "state": "OPEN", "ejected": True}
             pr.update(fields)
-            self.assertEqual(daemon.emoji_for(pr), expected, fields)
+            self.assertEqual(emoji_for(pr), expected, fields)
 
     def test_the_queue_outranks_an_ejection_it_has_taken_back(self):
         # Queued again before the answer was read: the newer fact wins.
         self.assertEqual(
-            daemon.emoji_for(
+            emoji_for(
                 {
                     "number": 1,
                     "state": "OPEN",
@@ -425,12 +439,12 @@ class Conversations(unittest.TestCase):
         # Two errands for two people: the reviewer who has not looked yet, and
         # whoever answers the threads an earlier reviewer or a bot left behind.
         self.assertEqual(
-            daemon.emoji_for(self.blocked(reviewDecision="REVIEW_REQUIRED")), "👀💬"
+            emoji_for(self.blocked(reviewDecision="REVIEW_REQUIRED")), "👀💬"
         )
 
     def test_open_threads_alone_replace_the_unexplained_block(self):
         # 🛑 says "blocked, and this plugin cannot say why". The threads say why.
-        self.assertEqual(daemon.emoji_for(self.blocked()), "💬")
+        self.assertEqual(emoji_for(self.blocked()), "💬")
 
     def test_the_modifier_rides_along_with_every_blocker(self):
         for fields, expected in (
@@ -440,18 +454,18 @@ class Conversations(unittest.TestCase):
             ({"required_running": True}, "🟡💬"),
             ({"ejected": True}, "🪃💬"),
         ):
-            self.assertEqual(daemon.emoji_for(self.blocked(**fields)), expected, fields)
+            self.assertEqual(emoji_for(self.blocked(**fields)), expected, fields)
 
     def test_a_draft_swallows_it_like_every_other_blocker(self):
-        self.assertEqual(daemon.emoji_for(self.blocked(isDraft=True)), "📝")
+        self.assertEqual(emoji_for(self.blocked(isDraft=True)), "📝")
 
     def test_an_unknown_merge_state_is_still_empty(self):
         # An empty verdict keeps its emptiness: UNKNOWN has to go on falling
         # through to whatever the row already shows.
-        self.assertEqual(daemon.emoji_for(self.blocked(mergeStateStatus="UNKNOWN")), "")
+        self.assertEqual(emoji_for(self.blocked(mergeStateStatus="UNKNOWN")), "")
 
     def test_nothing_is_appended_without_open_conversations(self):
-        self.assertEqual(daemon.emoji_for(self.blocked(conversation_block=False)), "🛑")
+        self.assertEqual(emoji_for(self.blocked(conversation_block=False)), "🛑")
 
 
 class MergeQueue(unittest.TestCase):
@@ -681,7 +695,7 @@ class Lookup(unittest.TestCase):
         targets = daemon.required_targets(prs)
         self.assertEqual(targets, [(APP, 103), (APP, 104), (SERVICE, 204)])
         marks = daemon.parse_required(fixture("required_checks.json")["data"], targets)
-        verdicts = daemon.decide(prs, marks)
+        verdicts = decide(prs, marks)
         self.assertEqual(
             verdicts,
             {
@@ -704,7 +718,7 @@ class Lookup(unittest.TestCase):
             fixture("lookup_queue.json")["data"], QUEUE_PAIRS
         )
         self.assertEqual(unanswered, [])
-        verdicts = daemon.decide(prs, {})
+        verdicts = decide(prs, {})
         self.assertEqual(
             verdicts,
             {
@@ -783,7 +797,7 @@ class Lookup(unittest.TestCase):
         data = {"p0": fixture("required_checks.json")["data"]["p3"]}
         marks = daemon.parse_required(data, [(APP, 104)])
         self.assertEqual(marks, {(APP, 104): (False, True, False)})
-        self.assertEqual(daemon.decide(prs, marks)[(APP, "feature/c-blocked")], "🟡")
+        self.assertEqual(decide(prs, marks)[(APP, "feature/c-blocked")], "🟡")
 
     def test_recorded_missing_review_and_open_thread_read_together(self):
         # The whole path for the recorded pull request of p4, the shape GitHub
@@ -805,7 +819,7 @@ class Lookup(unittest.TestCase):
         marks = daemon.parse_required(data, [(APP, 106)])
         self.assertEqual(marks, {(APP, 106): (False, False, True)})
         self.assertEqual(
-            daemon.decide(prs, marks)[(APP, "feature/i-conversations")], "👀💬"
+            decide(prs, marks)[(APP, "feature/i-conversations")], "👀💬"
         )
 
     def test_an_unknown_merge_state_keeps_the_last_emoji(self):
@@ -822,9 +836,9 @@ class Lookup(unittest.TestCase):
                 "mergeStateStatus": "UNKNOWN",
             }
         ]
-        self.assertEqual(daemon.decide(prs, {}), {})
+        self.assertEqual(decide(prs, {}), {})
         rows = [("w1", APP, "feature/a-clean")]
-        self.assertEqual(daemon.plan_publications(rows, daemon.decide(prs, {})), [("w1", None)])
+        self.assertEqual(daemon.plan_publications(rows, decide(prs, {})), [("w1", None)])
 
     def test_an_unrecognised_merge_state_keeps_the_last_emoji(self):
         # A status this plugin has never heard of is no better a reason to
@@ -838,7 +852,7 @@ class Lookup(unittest.TestCase):
                 "mergeStateStatus": "SOMETHING_GITHUB_ADDED",
             }
         ]
-        self.assertEqual(daemon.decide(prs, {}), {})
+        self.assertEqual(decide(prs, {}), {})
 
     def test_a_closed_pull_request_on_the_trunk_is_still_cleared(self):
         # Empty is the verdict there, not the absence of one.
@@ -851,7 +865,7 @@ class Lookup(unittest.TestCase):
                 "on_default_branch": True,
             }
         ]
-        self.assertEqual(daemon.decide(prs, {}), {(APP, "main"): ""})
+        self.assertEqual(decide(prs, {}), {(APP, "main"): ""})
 
     def test_unanswered_pull_request_falls_back_to_blocked(self):
         # The recorded shape of a pull request GitHub reported an error for.
@@ -869,7 +883,7 @@ class Lookup(unittest.TestCase):
                 "rollup": "FAILURE",
             }
         ]
-        self.assertEqual(daemon.decide(prs, marks)[(APP, "feature/c-blocked")], "🛑")
+        self.assertEqual(decide(prs, marks)[(APP, "feature/c-blocked")], "🛑")
 
 
 class Publishing(unittest.TestCase):
@@ -1062,6 +1076,12 @@ class Config(unittest.TestCase):
             (daemon.DEFAULT_INTERVAL, daemon.DEFAULT_ICONS),
         )
 
+    def test_the_icon_set(self):
+        self.assertEqual(self.read('icons = "emoji"\n')[1], daemon.EMOJI)
+        self.assertEqual(self.read('icons = "nerd"\n')[1], daemon.NERD)
+        # A name nobody defined keeps the default rather than blanking a row.
+        self.assertEqual(self.read('icons = "wingdings"\n')[1], daemon.DEFAULT_ICONS)
+
     def test_interval_and_unstable(self):
         interval, icons = self.read(
             'refreshIntervalSeconds = 300\nunstable = "warn"\n'
@@ -1083,7 +1103,41 @@ class Config(unittest.TestCase):
         # know that UNSTABLE is configurable.
         for value, key in (("ok", "unstable"), ("pass", "mergeable"), ("warn", "conflict")):
             icons = self.read('unstable = "%s"\n' % value)[1]
-            self.assertEqual(icons["unstable"], daemon.EMOJI[key], value)
+            self.assertEqual(icons["unstable"], icons[key], value)
+
+
+class IconSets(unittest.TestCase):
+    def test_both_sets_answer_for_every_state(self):
+        self.assertEqual(set(daemon.NERD), set(daemon.EMOJI))
+
+    def test_no_state_borrows_another_state_glyph(self):
+        # 🆗 and ✅ may coincide once `unstable` has resolved, but the sets
+        # themselves have to tell every state apart.
+        for name, icons in daemon.ICON_SETS.items():
+            self.assertEqual(len(set(icons.values())), len(icons), name)
+
+    def test_the_nerd_font_set_is_the_default(self):
+        self.assertEqual(daemon.DEFAULT_ICONS["queued"], daemon.NERD["queued"])
+
+    def test_the_setting_chooses_the_set(self):
+        self.assertEqual(
+            daemon.icon_set("emoji", "ok")["mergeable"], daemon.EMOJI["mergeable"]
+        )
+        self.assertEqual(
+            daemon.icon_set("nerd", "ok")["mergeable"], daemon.NERD["mergeable"]
+        )
+
+    def test_a_set_nobody_defined_falls_back_to_the_default(self):
+        self.assertEqual(daemon.icon_set("wingdings", "ok"), daemon.DEFAULT_ICONS)
+
+    def test_the_unstable_setting_resolves_inside_either_set(self):
+        for name, table in daemon.ICON_SETS.items():
+            self.assertEqual(
+                daemon.icon_set(name, "warn")["unstable"], table["conflict"], name
+            )
+            self.assertEqual(
+                daemon.icon_set(name, "pass")["unstable"], table["mergeable"], name
+            )
 
 
 class Errors(unittest.TestCase):
