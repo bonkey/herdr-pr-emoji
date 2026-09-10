@@ -291,8 +291,8 @@ class EmojiPrecedence(unittest.TestCase):
     def test_unstable_reads_ok_by_default_and_follows_the_setting(self):
         pr = {"number": 1, "state": "OPEN", "mergeStateStatus": "UNSTABLE"}
         self.assertEqual(daemon.emoji_for(pr), "🆗")
-        self.assertEqual(daemon.emoji_for(pr, "pass"), "✅")
-        self.assertEqual(daemon.emoji_for(pr, "warn"), "⚠️")
+        self.assertEqual(daemon.emoji_for(pr, daemon.icon_set("emoji", "pass")), "✅")
+        self.assertEqual(daemon.emoji_for(pr, daemon.icon_set("emoji", "warn")), "⚠️")
 
     def test_mergeable(self):
         for status in ("CLEAN", "BEHIND", "HAS_HOOKS"):
@@ -1059,13 +1059,15 @@ class Config(unittest.TestCase):
     def test_defaults_without_a_file(self):
         self.assertEqual(
             daemon.read_config(os.path.join(FIXTURES, "no-such-config.toml")),
-            (daemon.DEFAULT_INTERVAL, "ok"),
+            (daemon.DEFAULT_INTERVAL, daemon.DEFAULT_ICONS),
         )
 
     def test_interval_and_unstable(self):
-        self.assertEqual(
-            self.read('refreshIntervalSeconds = 300\nunstable = "warn"\n'), (300, "warn")
+        interval, icons = self.read(
+            'refreshIntervalSeconds = 300\nunstable = "warn"\n'
         )
+        self.assertEqual(interval, 300)
+        self.assertEqual(icons["unstable"], icons["conflict"])
 
     def test_interval_floor(self):
         self.assertEqual(self.read("refreshIntervalSeconds = 5\n")[0], 60)
@@ -1073,12 +1075,15 @@ class Config(unittest.TestCase):
     def test_unreadable_values_keep_the_defaults(self):
         self.assertEqual(
             self.read('refreshIntervalSeconds = soon\nunstable = "maybe"\n'),
-            (daemon.DEFAULT_INTERVAL, "ok"),
+            (daemon.DEFAULT_INTERVAL, daemon.DEFAULT_ICONS),
         )
 
     def test_every_unstable_value(self):
-        for value in ("ok", "pass", "warn"):
-            self.assertEqual(self.read('unstable = "%s"\n' % value)[1], value)
+        # The setting resolves into the table, so nothing downstream has to
+        # know that UNSTABLE is configurable.
+        for value, key in (("ok", "unstable"), ("pass", "mergeable"), ("warn", "conflict")):
+            icons = self.read('unstable = "%s"\n' % value)[1]
+            self.assertEqual(icons["unstable"], daemon.EMOJI[key], value)
 
 
 class Errors(unittest.TestCase):

@@ -68,6 +68,43 @@ FAILING_RESULTS = frozenset(
 RUNNING_STATUS = frozenset(["QUEUED", "IN_PROGRESS", "WAITING", "REQUESTED"])
 MERGEABLE_STATUS = frozenset(["CLEAN", "BEHIND", "HAS_HOOKS"])
 
+EMOJI = {
+    "no_pr": "❔",
+    "merged": "🟣",
+    "closed": "🚪",
+    "draft": "📝",
+    "queued": "🚂",
+    "conflict": "⚠️",
+    "failing_growing": "🟠",
+    "failing": "❌",
+    "running": "🟡",
+    "review": "👀",
+    "ejected": "🪃",
+    "blocked": "🛑",
+    "unstable": "🆗",
+    "mergeable": "✅",
+    "conversation": "💬",
+}
+ICON_SETS = {"emoji": EMOJI}
+DEFAULT_ICON_SET = "emoji"
+
+
+def icon_set(name, unstable):
+    """The glyph for every state, with the `unstable` setting resolved into it.
+
+    Carrying the resolved table instead of the setting keeps the choice in one
+    place: nothing downstream has to know that UNSTABLE is configurable.
+    """
+    icons = dict(ICON_SETS.get(name) or ICON_SETS[DEFAULT_ICON_SET])
+    if unstable == "warn":
+        icons["unstable"] = icons["conflict"]
+    elif unstable == "pass":
+        icons["unstable"] = icons["mergeable"]
+    return icons
+
+
+DEFAULT_ICONS = icon_set(DEFAULT_ICON_SET, DEFAULT_UNSTABLE)
+
 
 def log(message):
     sys.stderr.write(
@@ -98,13 +135,13 @@ def run(argv, timeout):
 
 
 def read_config(path):
-    """(interval, unstable) from config.toml, defaults for anything it does not set."""
+    """(interval, icons) from config.toml, defaults for anything it does not set."""
     interval, unstable = DEFAULT_INTERVAL, DEFAULT_UNSTABLE
     try:
         with open(path, "r", encoding="utf-8") as handle:
             text = handle.read()
     except OSError:
-        return interval, unstable
+        return interval, icon_set(DEFAULT_ICON_SET, unstable)
     found = re.search(
         r"^[ \t]*refreshIntervalSeconds[ \t]*=[ \t]*(\d+)", text, re.MULTILINE
     )
@@ -119,7 +156,7 @@ def read_config(path):
     found = re.search(r'^[ \t]*unstable[ \t]*=[ \t]*"([a-z]*)"', text, re.MULTILINE)
     if found and found.group(1) in ("ok", "pass", "warn"):
         unstable = found.group(1)
-    return interval, unstable
+    return interval, icon_set(DEFAULT_ICON_SET, unstable)
 
 
 # ---------------------------------------------------------------- pure decisions
@@ -168,7 +205,7 @@ def required_state(contexts, expected=()):
     return failing, running
 
 
-def blocker_for(pr, unstable=DEFAULT_UNSTABLE):
+def blocker_for(pr, icons=DEFAULT_ICONS):
     """The one thing most worth doing about a pull request. First match wins.
 
     A branch with no pull request reads ❔. An empty answer is reserved for a
@@ -196,37 +233,37 @@ def blocker_for(pr, unstable=DEFAULT_UNSTABLE):
     are green.
     """
     if pr.get("number") is None:
-        return "❔"
+        return icons["no_pr"]
     if pr.get("state") == "MERGED":
-        return "🟣"
+        return icons["merged"]
     if pr.get("state") == "CLOSED":
         # The trunk keeps whatever pull request last carried its name, and
         # `last: 1` goes on finding it for as long as the branch exists, so a
         # door on the default branch is history nobody acts on.
-        return "" if pr.get("on_default_branch") else "🚪"
+        return "" if pr.get("on_default_branch") else icons["closed"]
     if pr.get("isDraft"):
-        return "📝"
+        return icons["draft"]
     if pr.get("in_merge_queue"):
-        return "🚂"
+        return icons["queued"]
     status = pr.get("mergeStateStatus")
     if status == "DIRTY":
-        return "⚠️"
+        return icons["conflict"]
     if pr.get("required_failing"):
-        return "🟠" if pr.get("required_running") else "❌"
+        return (
+            icons["failing_growing"] if pr.get("required_running") else icons["failing"]
+        )
     if pr.get("rollup") == "PENDING" or pr.get("required_running"):
-        return "🟡"
+        return icons["running"]
     if pr.get("reviewDecision") == "REVIEW_REQUIRED":
-        return "👀"
+        return icons["review"]
     if pr.get("ejected"):
-        return "🪃"
+        return icons["ejected"]
     if status == "BLOCKED":
-        return "🛑"
+        return icons["blocked"]
     if status == "UNSTABLE":
-        if unstable == "warn":
-            return "⚠️"
-        return "✅" if unstable == "pass" else "🆗"
+        return icons["unstable"]
     if status in MERGEABLE_STATUS:
-        return "✅"
+        return icons["mergeable"]
     return ""
 
 
@@ -277,7 +314,7 @@ def queue_ejection(node):
     return bool(reason) and reason not in ("merged", "manual")
 
 
-def emoji_for(pr, unstable=DEFAULT_UNSTABLE):
+def emoji_for(pr, icons=DEFAULT_ICONS):
     """The blocker, and 💬 after it when conversations are open too.
 
     A missing review and an unresolved conversation are two errands for two
@@ -292,10 +329,12 @@ def emoji_for(pr, unstable=DEFAULT_UNSTABLE):
     already shows — and a draft swallows 💬 the way it swallows every other
     blocker.
     """
-    verdict = blocker_for(pr, unstable)
+    verdict = blocker_for(pr, icons)
     if not verdict or pr.get("isDraft") or not pr.get("conversation_block"):
         return verdict
-    return "💬" if verdict == "🛑" else verdict + "💬"
+    if verdict == icons["blocked"]:
+        return icons["conversation"]
+    return verdict + icons["conversation"]
 
 
 def describe_errors(errors):
@@ -474,7 +513,7 @@ def parse_required(data, targets):
     return marks
 
 
-def decide(prs, marks, unstable=DEFAULT_UNSTABLE):
+def decide(prs, marks, icons=DEFAULT_ICONS):
     """{(slug, branch): emoji} from the pull requests and their required-check marks.
 
     A pull request the required-check query did not answer for keeps the
@@ -496,7 +535,7 @@ def decide(prs, marks, unstable=DEFAULT_UNSTABLE):
         )
         pr["required_failing"], pr["required_running"] = failing, running
         pr["conversation_block"] = conversations
-        emoji = emoji_for(pr, unstable)
+        emoji = emoji_for(pr, icons)
         if not emoji and pr.get("number") is not None and pr.get("state") == "OPEN":
             continue
         verdicts[(pr["slug"], pr["branch"])] = emoji
@@ -543,7 +582,7 @@ def gh_graphql(query):
     return body.get("data"), body.get("errors") or []
 
 
-def resolve(pairs, unstable=DEFAULT_UNSTABLE):
+def resolve(pairs, icons=DEFAULT_ICONS):
     """{(slug, branch): emoji} for the branches GitHub answered for.
 
     Every failure is contained: an unanswered branch is simply absent, and an
@@ -572,7 +611,7 @@ def resolve(pairs, unstable=DEFAULT_UNSTABLE):
                 "no required checks for %s, ❌ and 🟡 fall back to 🛑"
                 % ", ".join("%s#%d" % target for target in missing)
             )
-    return decide(prs, marks, unstable)
+    return decide(prs, marks, icons)
 
 
 def git_branch(path):
@@ -644,7 +683,7 @@ def panes_of(panes, workspace_id):
     ]
 
 
-def cycle(interval, unstable):
+def cycle(interval, icons):
     """One cycle. Returns False only when herdr itself is unreachable."""
     workspaces = herdr_json("workspace", "list")
     panes = herdr_json("pane", "list")
@@ -661,7 +700,7 @@ def cycle(interval, unstable):
         rows.append((workspace_id, slug, branch))
 
     pairs = sorted({(slug, branch) for _, slug, branch in rows if slug and branch})
-    verdicts = resolve(pairs, unstable) if pairs else {}
+    verdicts = resolve(pairs, icons) if pairs else {}
 
     ttl_ms = interval * 3 * 1000
     skipped = 0
@@ -679,14 +718,14 @@ def cycle(interval, unstable):
     return True
 
 
-def guarded_cycle(interval, unstable):
+def guarded_cycle(interval, icons):
     """One cycle, with an unexpected answer contained.
 
     A payload no parser expected must cost one cycle, not the daemon: without a
     daemon nothing refreshes the tokens and every emoji disappears.
     """
     try:
-        return cycle(interval, unstable)
+        return cycle(interval, icons)
     except Exception as exc:
         log("cycle failed: %r" % exc)
         return True
@@ -709,8 +748,8 @@ def read_pairs(stream, slug=None):
     return sorted(pairs)
 
 
-def print_verdicts(pairs, unstable, with_slug):
-    verdicts = resolve(pairs, unstable)
+def print_verdicts(pairs, icons, with_slug):
+    verdicts = resolve(pairs, icons)
     for slug, branch in pairs:
         emoji = verdicts.get((slug, branch), "")
         if with_slug:
@@ -788,7 +827,7 @@ def main(argv):
         os.makedirs(STATE, exist_ok=True)
     except OSError:
         pass
-    interval, unstable = read_config(CONFIG)
+    interval, icons = read_config(CONFIG)
 
     if not shutil.which("gh"):
         log("gh is required; not starting")
@@ -799,13 +838,13 @@ def main(argv):
         if len(argv) < 2 or "/" not in argv[1]:
             log("usage: daemon.py --query owner/name")
             return 2
-        print_verdicts(read_pairs(sys.stdin, argv[1]), unstable, with_slug=False)
+        print_verdicts(read_pairs(sys.stdin, argv[1]), icons, with_slug=False)
         return 0
     if command == "--resolve":
-        print_verdicts(read_pairs(sys.stdin), unstable, with_slug=True)
+        print_verdicts(read_pairs(sys.stdin), icons, with_slug=True)
         return 0
     if command == "--once":
-        if not guarded_cycle(interval, unstable):
+        if not guarded_cycle(interval, icons):
             log("herdr unreachable")
         return 0
 
@@ -813,12 +852,15 @@ def main(argv):
     take_over_pidfile()
     for sig in (signal.SIGTERM, signal.SIGINT):
         signal.signal(sig, lambda *_: sys.exit(0))
-    log("started pid %d, interval %ds, unstable=%s" % (os.getpid(), interval, unstable))
+    log(
+        "started pid %d, interval %ds, unstable=%s"
+        % (os.getpid(), interval, icons["unstable"])
+    )
 
     failures = 0
     try:
         while True:
-            if guarded_cycle(interval, unstable):
+            if guarded_cycle(interval, icons):
                 failures = 0
             else:
                 failures += 1
