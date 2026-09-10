@@ -215,21 +215,21 @@ one to spare.
 [ui.sidebar.spaces]
 rows = [
   ["state_icon", { token = "$pr_emoji", rules = [
-      { contains = "", fg = "#8b949e" },  # draft
-      { contains = "", fg = "#1f6feb" },  # queued to merge
-      { contains = "", fg = "#db6d28" },  # conflict
-      { contains = "", fg = "#f85149" },  # required check failed, others still running
-      { contains = "", fg = "#f85149" },  # required check failed, all settled
-      { contains = "", fg = "#d29922" },  # checks running
-      { contains = "", fg = "#79c0ff" },  # review required
-      { contains = "", fg = "#db61a2" },  # thrown out of the merge queue
-      { contains = "", fg = "#ff7b72" },  # blocked
-      { contains = "", fg = "#7ee787" },  # only optional checks failing
-      { contains = "", fg = "#3fb950" },  # mergeable
-      { contains = "", fg = "#a371f7" },  # merged
-      { contains = "", fg = "#6e7681" },  # closed
-      { contains = "", fg = "#6e7681" },  # no pull request
-      { contains = "", fg = "#39c5cf" },  # conversation open
+      { contains = "\uF4DD", fg = "#8b949e" },  # draft                                 oct-git_pull_request_draft
+      { contains = "\uF4DB", fg = "#1f6feb" },  # queued to merge                       oct-git_merge_queue
+      { contains = "\uF421", fg = "#db6d28" },  # conflict                              oct-alert
+      { contains = "\uF52F", fg = "#f85149" },  # required check failed, others running oct-x_circle
+      { contains = "\uF530", fg = "#f85149" },  # required check failed, settled        oct-x_circle_fill
+      { contains = "\uF46A", fg = "#d29922" },  # checks running                        oct-sync
+      { contains = "\uF441", fg = "#79c0ff" },  # review required                       oct-eye
+      { contains = "\uF426", fg = "#db61a2" },  # thrown out of the queue               oct-sign_out
+      { contains = "\uF4F4", fg = "#ff7b72" },  # blocked                               oct-no_entry
+      { contains = "\uF42E", fg = "#7ee787" },  # only optional checks failing          oct-check
+      { contains = "\uF4A4", fg = "#3fb950" },  # mergeable                             oct-check_circle_fill
+      { contains = "\uF419", fg = "#a371f7" },  # merged                                oct-git_merge
+      { contains = "\uF4DC", fg = "#6e7681" },  # closed                                oct-git_pull_request_closed
+      { contains = "\uF420", fg = "#6e7681" },  # no pull request                       oct-question
+      { contains = "\uF442", fg = "#39c5cf" },  # conversation open                     oct-comment_discussion
   ] }, "workspace"],
   ["branch", "git_status"],
 ]
@@ -237,6 +237,8 @@ rows = [
 
 `contains` rather than `equals`, because a verdict that carries 💬 is two glyphs: the blocker
 on the left still colours the cell, and a 💬 standing alone falls through to the last rule.
+The `\uXXXX` escapes are the glyphs themselves; herdr's TOML reads them, and they keep the
+block legible where a private-use character would be an empty box.
 The rules are ordered the way `blocker_for` decides, so the emoji and its colour always agree
 about which state won.
 
