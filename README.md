@@ -44,11 +44,13 @@ The decisive fields are GitHub's `mergeStateStatus` and `reviewDecision`, plus w
 | `state == MERGED` | 🟣 |
 | `state == CLOSED` (closed unmerged), unless the branch is the repository's default | 🚪 |
 | `isDraft` | 📝 |
+| `isInMergeQueue` (the merge queue is holding it) | 🚂 |
 | `mergeStateStatus == DIRTY` (merge conflict) | ⚠️ |
 | the newest attempt of a **required** check failed (`isRequired` on a failing check run or status) **while other required checks still run** | 🟠 |
 | the same failure with every required check settled | ❌ |
 | checks still running (`statusCheckRollup.state == PENDING`, or a required check queued, in progress, or yet to report at all) | 🟡 |
 | `reviewDecision == REVIEW_REQUIRED` (waiting for a reviewer) | 👀 |
+| the merge queue let go of it, and not by merging it | 🪃 |
 | `mergeStateStatus == BLOCKED` (not mergeable for some other reason) | 🛑 |
 | `mergeStateStatus == UNSTABLE` (**only non-required checks failing**) | 🆗, or ✅ with `unstable = "pass"`, ⚠️ with `unstable = "warn"` |
 | `mergeStateStatus` in `CLEAN`, `BEHIND`, `HAS_HOOKS` | ✅ |
@@ -86,6 +88,43 @@ the list of what to fix is complete: with ❌ every required check has settled, 
 others are still running and a fix now invites a second pass. GitHub reports both facts
 independently, so the split costs nothing — `isRequired` already answers it.
 
+🚂 is read early because the queue owns the pull request while it holds it. A queued pull
+request reports nothing useful about itself — `UNKNOWN` while GitHub recomputes
+mergeability, `BLOCKED` where the queue is the only thing allowed to merge it — so without
+`isInMergeQueue` the row shows either 🛑 or whatever it showed before, and neither is true.
+The facts it does still report are the ones the queue acts on itself, by throwing it out,
+which the next emoji reports. A queued pull request is also skipped by the second request:
+its verdict is already settled, and that is what keeps 💬 off it.
+
+🪃 is read late for the opposite reason. An ejection is a refusal, not a fix, and every
+emoji above it names something that would make the pull request acceptable again: you
+cannot queue an unapproved pull request, you should not queue one over a failing required
+check, and a conflicted one cannot be queued at all. Being outranked by ⚠️, ❌, 🟠, 🟡 or
+👀 costs nothing, because those are the next step. Being outranked by 🛑 or ✅ would cost
+everything: the merge group that broke belonged to other pull requests, so this one's own
+checks are entirely green, and without 🪃 it reads ✅ — the one place this plugin would say
+*mergeable* about a pull request nothing is going to merge.
+
+The pair works as a sequence. While the queue holds a pull request that conflicts, the row
+reads 🚂; the moment the queue throws it out for the conflict, the row reads ⚠️, because 🪃
+sits below it. The emoji names the errand as soon as there is one.
+
+🪃 clears itself without this plugin remembering anything.
+`timelineItems(last: 1, itemTypes: [ADDED_TO_MERGE_QUEUE_EVENT, REMOVED_FROM_MERGE_QUEUE_EVENT, PULL_REQUEST_COMMIT, HEAD_REF_FORCE_PUSHED_EVENT])`
+asks which of four things happened to the pull request most recently: the queue took it,
+the queue let it go, somebody pushed, somebody force-pushed. 🪃 is one of those four
+answers and a push is another, so a fix erases it and so does queueing it again. The
+timeline is the state file, and GitHub keeps it — across restarts, reinstalls and a second
+hand-launched copy, which a local cache would not. One node, in the request the branch
+lookup already makes.
+
+`reason` tells a merge from a rejection. Every exit from the queue emits the same removal
+event, and only `merged` means it worked; `manual` means a person took it out on purpose,
+and that person knows. Every other reason counts, including one GitHub has yet to invent,
+because an unfamiliar reason that fell through would read ✅ again — the opposite of the
+caution the rest of this plugin uses, and for the opposite reason: here silence is the bug.
+A removal that records no reason at all is no evidence, and says nothing.
+
 ## The 💬 modifier
 
 💬 is the one emoji that joins another instead of replacing it, so the token is never wider
@@ -94,7 +133,7 @@ than two:
 | Reads | Means |
 |---|---|
 | 👀💬 | nobody has reviewed it **and** a conversation is open |
-| ❌💬, 🟠💬, 🟡💬, ⚠️💬 | the blocker on the left, and a conversation is open |
+| ❌💬, 🟠💬, 🟡💬, ⚠️💬, 🪃💬 | the blocker on the left, and a conversation is open |
 | 💬 | conversations are the only thing left |
 
 A missing review and an unresolved conversation are two errands for two people. The
@@ -105,7 +144,9 @@ cannot ask for both, so this one rides along.
 Where 💬 stands alone it replaces 🛑 rather than joining it: 🛑 means *blocked, and this
 plugin cannot say why*, and open conversations say why. A draft swallows 💬 the way it
 swallows every other blocker, and an empty verdict keeps its emptiness — `UNKNOWN` goes on
-falling through to whatever the row already shows.
+falling through to whatever the row already shows. A queued pull request carries no 💬
+either, because it never reaches the request that reads the threads: the queue is merging
+it, and a conversation is not an errand that can stop it.
 
 An open thread only counts where the base branch asks for it. `requiresConversationResolution`
 sits in the same `branchProtectionRule` the plugin already reads for
@@ -145,8 +186,11 @@ One long-lived loop, started with the server. Each cycle:
 2. For each workspace, `git branch --show-current` and the `origin` URL, locally.
 3. **One GraphQL request for every repository and branch at once**
    (`pullRequests(headRefName:, last: 1)` aliased per branch), so the answer is exact even
-   for merged branches. A second request, only for open PRs that report a failure or are
-   `BLOCKED`, asks each check `isRequired(pullRequestNumber:)`, the base branch for
+   for merged branches. The same request asks whether the merge queue holds the pull
+   request and, from its timeline, which of four things happened to it most recently, so
+   🚂 and 🪃 cost no round trip of their own. A second request, only for open PRs that
+   report a failure or are `BLOCKED` and that the queue is not holding, asks each check
+   `isRequired(pullRequestNumber:)`, the base branch for
    `requiredStatusCheckContexts` and `requiresConversationResolution`, and the pull request
    for its review threads, to tell 🟠 from ❌ from 🟡 from 💬 from 🛑. Two calls per cycle,
    however many repositories are open.
@@ -200,7 +244,8 @@ tests over GraphQL responses recorded from real pull requests, under `fixtures/`
 ## Non-goals
 
 Titles, review counts, several rows per space, opening PRs. One emoji per row, and 💬 after
-it when conversations are open too — no third slot.
+it when conversations are open too — no third slot. A queued pull request's position in the
+queue and its estimated time to merge are the queue's business, not a row's.
 
 ## License
 

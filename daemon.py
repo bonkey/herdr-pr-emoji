@@ -184,6 +184,16 @@ def blocker_for(pr, unstable=DEFAULT_UNSTABLE):
     🟠 separates a failure that is still growing from a settled one: while
     other required checks run, the list of what to fix is incomplete, and
     fixing it now invites a second pass.
+
+    🚂 is read early because the queue owns the pull request while it holds
+    it. The facts a queued pull request still reports are the ones the queue
+    acts on itself, by throwing it out, which 🪃 then reports.
+
+    🪃 is read late for the opposite reason: an ejection is a refusal rather
+    than a fix, and every rung above it names something that would make the
+    pull request acceptable again. What it replaces is the ✅ below it, where
+    the merge group broke on another pull request and this one's own checks
+    are green.
     """
     if pr.get("number") is None:
         return "❔"
@@ -196,6 +206,8 @@ def blocker_for(pr, unstable=DEFAULT_UNSTABLE):
         return "" if pr.get("on_default_branch") else "🚪"
     if pr.get("isDraft"):
         return "📝"
+    if pr.get("in_merge_queue"):
+        return "🚂"
     status = pr.get("mergeStateStatus")
     if status == "DIRTY":
         return "⚠️"
@@ -205,6 +217,8 @@ def blocker_for(pr, unstable=DEFAULT_UNSTABLE):
         return "🟡"
     if pr.get("reviewDecision") == "REVIEW_REQUIRED":
         return "👀"
+    if pr.get("ejected"):
+        return "🪃"
     if status == "BLOCKED":
         return "🛑"
     if status == "UNSTABLE":
@@ -237,6 +251,30 @@ def conversation_block(pull):
         return False
     threads = (pull.get("reviewThreads") or {}).get("nodes") or []
     return any(thread.get("isResolved") is False for thread in threads)
+
+
+def queue_ejection(node):
+    """True when the last thing that happened to this pull request was the
+    merge queue letting go of it, and not by merging it.
+
+    The timeline is the state file, and GitHub keeps it. `timelineItems` asks
+    which of four things happened most recently — the queue took it, the queue
+    let it go, somebody pushed, somebody force-pushed — so a fix clears this
+    and so does queueing it again, with nothing remembered between cycles.
+
+    Every exit from the queue emits the same removal event, and `reason` tells
+    them apart: `merged` means it worked, `manual` means a person took it out
+    and knows. Every other reason counts, including one GitHub has yet to
+    invent, because an unfamiliar reason that fell through would read ✅ about
+    a pull request nothing is going to merge. A removal with no reason
+    recorded is no evidence, and says nothing.
+    """
+    items = (node.get("timelineItems") or {}).get("nodes") or []
+    newest = (items[-1] if items else None) or {}
+    if newest.get("__typename") != "RemovedFromMergeQueueEvent":
+        return False
+    reason = newest.get("reason") or ""
+    return bool(reason) and reason not in ("merged", "manual")
 
 
 def emoji_for(pr, unstable=DEFAULT_UNSTABLE):
@@ -281,7 +319,10 @@ def lookup_query(pairs):
         for branch_index, branch in enumerate(branches):
             fields.append(
                 "b%d: pullRequests(headRefName: %s, last: 1, orderBy: {field: CREATED_AT, direction: ASC}) "
-                "{ nodes { number isDraft state mergeStateStatus reviewDecision "
+                "{ nodes { number isDraft state mergeStateStatus reviewDecision isInMergeQueue "
+                "timelineItems(last: 1, itemTypes: [ADDED_TO_MERGE_QUEUE_EVENT, "
+                "REMOVED_FROM_MERGE_QUEUE_EVENT, PULL_REQUEST_COMMIT, HEAD_REF_FORCE_PUSHED_EVENT]) "
+                "{ nodes { __typename ... on RemovedFromMergeQueueEvent { reason } } } "
                 "commits(last: 1) "
                 "{ nodes { commit { statusCheckRollup { state } } } } } }"
                 % (branch_index, json.dumps(branch))
@@ -340,6 +381,8 @@ def parse_lookup(data, pairs):
                     mergeStateStatus=node.get("mergeStateStatus"),
                     reviewDecision=node.get("reviewDecision") or "",
                     rollup=rollup or "",
+                    in_merge_queue=node.get("isInMergeQueue") is True,
+                    ejected=queue_ejection(node),
                 )
             prs.append(pr)
     return prs, unanswered
@@ -355,10 +398,17 @@ def required_targets(prs):
     A BLOCKED pull request needs the same look: a required context that has
     posted nothing leaves no trace in the rollup, so a clean-looking BLOCKED
     pull request can still be waiting for a required check.
+
+    A pull request the merge queue holds is skipped: whatever merge state it
+    reports, 🚂 is already its whole verdict, so the closer look would buy
+    nothing. That also keeps 💬 off it, since conversations are read by the
+    same request.
     """
     targets = set()
     for pr in prs:
         if pr.get("state") != "OPEN":
+            continue
+        if pr.get("in_merge_queue"):
             continue
         if (
             pr.get("rollup") in ("FAILURE", "ERROR")

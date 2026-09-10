@@ -15,7 +15,13 @@
 # lookup.json carries no `reviewDecision`, so it also covers a base branch that
 # asks for no reviews. The 👀 cases are unit tests below. Its `defaultBranchRef`
 # is the one field added by hand, so the recorded response covers the rule that
-# keeps a door off the trunk.
+# keeps a door off the trunk. It also carries neither `isInMergeQueue` nor
+# `timelineItems`, which is the shape of a repository with no merge queue.
+#
+# lookup_queue.json is the exception: it is built by hand, in the shape the
+# recorded queries answer with. A pull request the merge queue has thrown out
+# is a short-lived state, and none was open in any repository searched when
+# this was written, so the ejected aliases could not be recorded from one.
 
 import json
 import os
@@ -43,6 +49,16 @@ PAIRS = [
     (SERVICE, "feature/h-blocked"),  # r1 b3: #204 OPEN BLOCKED, rollup FAILURE
     (SERVICE, "main"),  # r1 b4: #205 CLOSED
     (SERVICE, "no-pr"),  # r1 b5: no pull request
+]
+
+
+# The branches behind lookup_queue.json, in the order its aliases use.
+QUEUE_PAIRS = [
+    (APP, "feature/queued"),  # r0 b0: #110 OPEN, in the merge queue
+    (APP, "feature/ejected"),  # r0 b1: #111 OPEN CLEAN, ejected, failed_checks
+    (APP, "feature/ejected-conflict"),  # r0 b2: #112 OPEN DIRTY, merge_conflict
+    (APP, "feature/merged-by-the-queue"),  # r0 b3: #113 MERGED, reason merged
+    (APP, "feature/pushed-after"),  # r0 b4: #114 OPEN CLEAN, pushed since
 ]
 
 
@@ -299,6 +315,99 @@ class EmojiPrecedence(unittest.TestCase):
         )
 
 
+    def test_the_queue_owns_a_pull_request_while_it_holds_it(self):
+        # Everything the pull request still reports is the queue's business:
+        # if any of it matters, the queue throws it out and 🪃 says so.
+        self.assertEqual(
+            daemon.emoji_for(
+                {
+                    "number": 1,
+                    "state": "OPEN",
+                    "in_merge_queue": True,
+                    "mergeStateStatus": "BLOCKED",
+                    "rollup": "PENDING",
+                    "required_running": True,
+                }
+            ),
+            "🚂",
+        )
+
+    def test_a_draft_cannot_be_queued(self):
+        self.assertEqual(
+            daemon.emoji_for(
+                {"number": 1, "state": "OPEN", "isDraft": True, "in_merge_queue": True}
+            ),
+            "📝",
+        )
+
+    def test_merged_beats_the_queue_that_merged_it(self):
+        # Both facts arrive in one response, and the merge is the later one.
+        self.assertEqual(
+            daemon.emoji_for(
+                {"number": 1, "state": "MERGED", "in_merge_queue": True}
+            ),
+            "🟣",
+        )
+
+    def test_an_ejected_pull_request_is_not_mergeable(self):
+        # The merge group broke on somebody else's pull request, so this one's
+        # own checks are green and every other rung is silent. Without 🪃 this
+        # reads ✅ about a pull request nothing is going to merge.
+        self.assertEqual(
+            daemon.emoji_for(
+                {
+                    "number": 1,
+                    "state": "OPEN",
+                    "ejected": True,
+                    "mergeStateStatus": "CLEAN",
+                }
+            ),
+            "🪃",
+        )
+
+    def test_an_ejection_explains_a_block(self):
+        self.assertEqual(
+            daemon.emoji_for(
+                {
+                    "number": 1,
+                    "state": "OPEN",
+                    "ejected": True,
+                    "mergeStateStatus": "BLOCKED",
+                }
+            ),
+            "🪃",
+        )
+
+    def test_an_ejection_yields_to_whatever_would_fix_it(self):
+        # An ejection is a refusal, not a fix, and every rung above it names a
+        # prerequisite for queueing the pull request again.
+        for fields, expected in (
+            ({"mergeStateStatus": "DIRTY"}, "⚠️"),
+            ({"required_failing": True}, "❌"),
+            ({"required_failing": True, "required_running": True}, "🟠"),
+            ({"required_running": True}, "🟡"),
+            ({"reviewDecision": "REVIEW_REQUIRED"}, "👀"),
+        ):
+            pr = {"number": 1, "state": "OPEN", "ejected": True}
+            pr.update(fields)
+            self.assertEqual(daemon.emoji_for(pr), expected, fields)
+
+    def test_the_queue_outranks_an_ejection_it_has_taken_back(self):
+        # Queued again before the answer was read: the newer fact wins.
+        self.assertEqual(
+            daemon.emoji_for(
+                {
+                    "number": 1,
+                    "state": "OPEN",
+                    "in_merge_queue": True,
+                    "ejected": True,
+                    "mergeStateStatus": "CLEAN",
+                }
+            ),
+            "🚂",
+        )
+
+
 class Conversations(unittest.TestCase):
     """💬 is the one modifier, and the token is never wider than two."""
 
@@ -329,6 +438,7 @@ class Conversations(unittest.TestCase):
             ({"required_failing": True}, "❌💬"),
             ({"required_failing": True, "required_running": True}, "🟠💬"),
             ({"required_running": True}, "🟡💬"),
+            ({"ejected": True}, "🪃💬"),
         ):
             self.assertEqual(daemon.emoji_for(self.blocked(**fields)), expected, fields)
 
@@ -342,6 +452,92 @@ class Conversations(unittest.TestCase):
 
     def test_nothing_is_appended_without_open_conversations(self):
         self.assertEqual(daemon.emoji_for(self.blocked(conversation_block=False)), "🛑")
+
+
+class MergeQueue(unittest.TestCase):
+    """Which of four things happened to the pull request most recently."""
+
+    def timeline(self, *items):
+        return {"timelineItems": {"nodes": list(items)}}
+
+    def removal(self, reason):
+        return {"__typename": "RemovedFromMergeQueueEvent", "reason": reason}
+
+    def test_a_failed_merge_group_ejects(self):
+        self.assertTrue(
+            daemon.queue_ejection(self.timeline(self.removal("failed_checks")))
+        )
+
+    def test_a_merge_group_conflict_ejects(self):
+        self.assertTrue(
+            daemon.queue_ejection(self.timeline(self.removal("merge_conflict")))
+        )
+
+    def test_the_queue_merging_it_is_not_an_ejection(self):
+        # Every exit from the queue emits this event, the successful one too.
+        self.assertFalse(daemon.queue_ejection(self.timeline(self.removal("merged"))))
+
+    def test_a_person_taking_it_out_is_not_an_ejection(self):
+        # They did it on purpose and already know.
+        self.assertFalse(daemon.queue_ejection(self.timeline(self.removal("manual"))))
+
+    def test_a_reason_github_has_yet_to_invent_still_ejects(self):
+        # Falling through would read ✅ about a pull request nothing will merge.
+        self.assertTrue(
+            daemon.queue_ejection(self.timeline(self.removal("queue_cleared")))
+        )
+
+    def test_a_removal_with_no_reason_recorded_says_nothing(self):
+        self.assertFalse(daemon.queue_ejection(self.timeline(self.removal(None))))
+
+    def test_a_commit_after_the_removal_clears_it(self):
+        self.assertFalse(
+            daemon.queue_ejection(
+                self.timeline(
+                    self.removal("failed_checks"), {"__typename": "PullRequestCommit"}
+                )
+            )
+        )
+
+    def test_a_force_push_after_the_removal_clears_it(self):
+        self.assertFalse(
+            daemon.queue_ejection(
+                self.timeline(
+                    self.removal("failed_checks"),
+                    {"__typename": "HeadRefForcePushedEvent"},
+                )
+            )
+        )
+
+    def test_being_queued_again_clears_it(self):
+        self.assertFalse(
+            daemon.queue_ejection(
+                self.timeline(
+                    self.removal("failed_checks"),
+                    {"__typename": "AddedToMergeQueueEvent"},
+                )
+            )
+        )
+
+    def test_the_newest_item_is_the_last_one(self):
+        # The timeline ascends, so the answer is at the end of it.
+        self.assertTrue(
+            daemon.queue_ejection(
+                self.timeline(
+                    {"__typename": "PullRequestCommit"},
+                    self.removal("failed_checks"),
+                )
+            )
+        )
+
+    def test_a_pull_request_that_never_saw_the_queue(self):
+        self.assertFalse(daemon.queue_ejection(self.timeline()))
+
+    def test_a_timeline_the_answer_did_not_carry(self):
+        # The shape of a repository with no merge queue, and of a field the
+        # response left out.
+        for node in ({}, {"timelineItems": None}, {"timelineItems": {"nodes": None}}):
+            self.assertFalse(daemon.queue_ejection(node), node)
 
 
 class RequiredChecks(unittest.TestCase):
@@ -502,6 +698,38 @@ class Lookup(unittest.TestCase):
                 (SERVICE, "no-pr"): "❔",
             },
         )
+
+    def test_the_queue_fixture_maps_every_branch(self):
+        prs, unanswered = daemon.parse_lookup(
+            fixture("lookup_queue.json")["data"], QUEUE_PAIRS
+        )
+        self.assertEqual(unanswered, [])
+        verdicts = daemon.decide(prs, {})
+        self.assertEqual(
+            verdicts,
+            {
+                (APP, "feature/queued"): "🚂",
+                (APP, "feature/ejected"): "🪃",
+                (APP, "feature/ejected-conflict"): "⚠️",
+                (APP, "feature/merged-by-the-queue"): "🟣",
+                (APP, "feature/pushed-after"): "✅",
+            },
+        )
+
+    def test_a_queued_pull_request_needs_no_second_request(self):
+        # Its verdict is already settled, so the required-check query would buy
+        # nothing — and that is also what keeps 💬 off it.
+        prs, _ = daemon.parse_lookup(
+            fixture("lookup_queue.json")["data"], QUEUE_PAIRS
+        )
+        self.assertEqual(daemon.required_targets(prs), [])
+
+    def test_a_repository_with_no_merge_queue_reads_as_it_always_did(self):
+        # lookup.json carries neither new field, so the fields it never
+        # answered for cannot invent a verdict.
+        prs, _ = daemon.parse_lookup(fixture("lookup.json")["data"], PAIRS)
+        self.assertFalse(any(pr.get("in_merge_queue") for pr in prs))
+        self.assertFalse(any(pr.get("ejected") for pr in prs))
 
     def test_partial_data_keeps_the_repository_that_answered(self):
         # Recorded from a response that carried `data` and `errors` together:
@@ -688,6 +916,20 @@ class Queries(unittest.TestCase):
     def test_lookup_query_asks_for_the_review_decision(self):
         # It rides along in the branch lookup, so 👀 costs no extra request.
         self.assertIn("reviewDecision", daemon.lookup_query(PAIRS))
+
+    def test_lookup_query_asks_whether_the_pull_request_is_queued(self):
+        self.assertIn("isInMergeQueue", daemon.lookup_query(PAIRS))
+
+    def test_lookup_query_asks_the_timeline_for_the_last_queue_event(self):
+        query = daemon.lookup_query(PAIRS)
+        self.assertIn("REMOVED_FROM_MERGE_QUEUE_EVENT", query)
+        self.assertIn("... on RemovedFromMergeQueueEvent { reason }", query)
+
+    def test_the_timeline_costs_one_item_per_branch(self):
+        # One node each, in the request the branch lookup already makes.
+        query = daemon.lookup_query(PAIRS)
+        self.assertEqual(query.count("timelineItems(last: 1,"), len(PAIRS))
+        self.assertNotIn("mergeQueueEntry", query)
 
     def test_lookup_query_aliases_every_branch_of_every_repository(self):
         query = daemon.lookup_query(PAIRS)
