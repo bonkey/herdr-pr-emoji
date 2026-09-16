@@ -992,6 +992,51 @@ class Signoff(unittest.TestCase):
         prs = [self.open_pr("feature/x", mergeStateStatus="CLEAN")]
         self.assertTrue(daemon.signoff_input(prs).endswith("\tCLEAN\t\n"))
 
+    def test_resolve_asks_the_hook_with_the_checks_already_marked(self):
+        """The whole path: the hook is asked before a verdict is decided, so
+        the marks must reach the pull requests before it, not with `decide`."""
+        lookup = {
+            "r0": {
+                "defaultBranchRef": {"name": "main"},
+                "b0": {
+                    "nodes": [
+                        {
+                            "number": 104,
+                            "isDraft": False,
+                            "state": "OPEN",
+                            "mergeStateStatus": "BLOCKED",
+                            "reviewDecision": "APPROVED",
+                            "isInMergeQueue": False,
+                            "commits": {
+                                "nodes": [
+                                    {"commit": {"statusCheckRollup": {"state": "SUCCESS"}}}
+                                ]
+                            },
+                        }
+                    ]
+                },
+            }
+        }
+        required = {"p0": fixture("required_checks.json")["data"]["p4"]}
+        answers = iter([(lookup, []), (required, [])])
+        asked = []
+
+        def hook(command, timeout, text):
+            asked.append(text)
+            return {}
+
+        with mock.patch.object(daemon, "gh_graphql", lambda query: next(answers)):
+            with mock.patch.object(daemon, "run_signoff", hook):
+                daemon.resolve([(APP, "feature/x")], EMOJI, ("/bin/true", 10))
+
+        self.assertEqual(
+            asked,
+            [
+                "%s\tfeature/x\t104\tAPPROVED\tBLOCKED"
+                "\trequired-review=ACTION_REQUIRED\n" % APP
+            ],
+        )
+
     def test_nothing_to_ask_about_is_an_empty_input(self):
         self.assertEqual(daemon.signoff_input([{"number": None}]), "")
 

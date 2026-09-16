@@ -747,6 +747,26 @@ def parse_required(data, targets):
     return marks
 
 
+def apply_marks(prs, marks):
+    """Write every pull request's required-check marks onto it.
+
+    Apart from `decide` because the sign-off hook is asked first and is told
+    which required checks have yet to pass: the marks have to reach the pull
+    requests before either of them reads one. Writing them twice writes the
+    same values, so `decide` goes on doing it for a caller that has not.
+
+    A pull request the required-check query did not answer for keeps the
+    defaults, which name no check and blame none.
+    """
+    for pr in prs:
+        failing, running, unsatisfied, conversations = marks.get(
+            (pr["slug"], pr.get("number")), (False, False, (), False)
+        )
+        pr["required_failing"], pr["required_running"] = failing, running
+        pr["required_unsatisfied"] = unsatisfied
+        pr["conversation_block"] = conversations
+
+
 def decide(prs, marks, icons=DEFAULT_ICONS, signoffs=None):
     """{(slug, branch): emoji} from the pull requests, their required-check
     marks and the sign-off states the hook answered with.
@@ -763,14 +783,9 @@ def decide(prs, marks, icons=DEFAULT_ICONS, signoffs=None):
     recognise is no better a reason to erase a good emoji. The TTL still
     expires whatever nobody refreshes.
     """
+    apply_marks(prs, marks)
     verdicts = {}
     for pr in prs:
-        failing, running, unsatisfied, conversations = marks.get(
-            (pr["slug"], pr.get("number")), (False, False, (), False)
-        )
-        pr["required_failing"], pr["required_running"] = failing, running
-        pr["required_unsatisfied"] = unsatisfied
-        pr["conversation_block"] = conversations
         pr["signoff"] = (signoffs or {}).get((pr["slug"], pr["branch"]), "")
         emoji = emoji_for(pr, icons)
         if not emoji and pr.get("number") is not None and pr.get("state") == "OPEN":
@@ -914,6 +929,7 @@ def resolve(pairs, icons=DEFAULT_ICONS, signoff=None):
     signoffs = {}
     command, timeout = signoff or ("", DEFAULT_SIGNOFF_TIMEOUT)
     if command:
+        apply_marks(prs, marks)
         text = signoff_input(prs)
         if text:
             signoffs = run_signoff(command, timeout, text)
