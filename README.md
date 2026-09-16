@@ -210,7 +210,7 @@ optional command reports that state, and one more glyph carries it behind the bl
 **What the state means is the command's business, not this plugin's.** It runs once a cycle,
 as one argv with no shell, and every open, undrafted pull request arrives on its stdin:
 
-    owner/name<TAB>branch<TAB>number<TAB>reviewDecision<TAB>mergeStateStatus
+    owner/name<TAB>branch<TAB>number<TAB>reviewDecision<TAB>mergeStateStatus<TAB>unsatisfied
 
 It answers the rows it knows about, one per line:
 
@@ -218,7 +218,17 @@ It answers the rows it knows about, one per line:
 
 The columns are append-only, so a command that reads the first three goes on working
 whatever is added behind them. The verdict is not among them: it carries the sign-off glyph
-itself, so passing it in would ask the command to answer with what it was given. Only the
+itself, so passing it in would ask the command to answer with what it was given.
+
+`unsatisfied` names the required checks that have yet to pass, as `name=RESULT` joined by
+`;` — `Required review=ACTION_REQUIRED;Test Results=EXPECTED`. `reviewDecision` alone cannot
+report a review that a required check asks for and a review bot has already given: GitHub
+answers `APPROVED` while the check stands at `ACTION_REQUIRED`, and the pull request reads ✅
+with nothing to show that a human still has to look. The names say which gate is open. Which
+of them means a human review is the command's business, and a check name is free text, so
+`;`, `=` and the separators are replaced by a space inside one. The column is empty where
+nothing is unsatisfied, and where the plugin did not ask — the second request covers every
+pull request a gate is holding, but not one the merge queue is holding. Only the
 rows whose answer a glyph could show are sent — a merged, closed or drafted pull request, and
 a branch with none at all, are left out, because a draft swallows the sign-off the way it
 swallows 💬.

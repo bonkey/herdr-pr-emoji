@@ -74,6 +74,9 @@ FAILING_RESULTS = frozenset(
 )
 RUNNING_STATUS = frozenset(["QUEUED", "IN_PROGRESS", "WAITING", "REQUESTED"])
 MERGEABLE_STATUS = frozenset(["CLEAN", "BEHIND", "HAS_HOOKS"])
+# A required check whose newest attempt ended this way asks for nothing more.
+# GitHub merges over a skipped or neutral required check.
+SATISFIED_RESULTS = frozenset(["SUCCESS", "NEUTRAL", "SKIPPED"])
 
 EMOJI = {
     "no_pr": "❔",
@@ -277,7 +280,8 @@ def read_signoff(path):
 
 
 def required_state(contexts, expected=()):
-    """(failing, running) over the newest attempt of every required check.
+    """(failing, running, unsatisfied) over the newest attempt of every
+    required check.
 
     A re-run keeps every earlier attempt in the rollup, so only the newest
     attempt of a check name counts, the way branch protection counts it. An
@@ -290,6 +294,14 @@ def required_state(contexts, expected=()):
     so it counts as running. A name counts as reported however GitHub marked
     it: a context whose `isRequired` says false while branch protection asks
     for the same name would otherwise stay pending for good.
+
+    `unsatisfied` is [(name, result)] for every required check whose newest
+    attempt did not succeed, sorted by name, with `EXPECTED` as the result of
+    one that has reported nothing. It names what the row cannot: 🛑 says a pull
+    request is blocked, and this says which check does the blocking, which is
+    what a `signoffCommand` reads to tell a gate it cares about from one it
+    does not. SKIPPED and NEUTRAL count as satisfied, the way GitHub counts
+    them — a skipped required check does not block a merge.
     """
     latest = {}
     reported = set()
@@ -316,7 +328,15 @@ def required_state(contexts, expected=()):
     running = any(running for _, _, running in latest.values()) or any(
         name not in reported for name in expected
     )
-    return failing, running
+    unsatisfied = {
+        name: result
+        for name, (_, result, _) in latest.items()
+        if result not in SATISFIED_RESULTS
+    }
+    unsatisfied.update(
+        (name, "EXPECTED") for name in expected if name not in reported
+    )
+    return failing, running, sorted(unsatisfied.items())
 
 
 def blocker_for(pr, icons=DEFAULT_ICONS):
@@ -470,8 +490,8 @@ def emoji_for(pr, icons=DEFAULT_ICONS):
 
 
 def signoff_input(prs):
-    """The hook's stdin: `slug<TAB>branch<TAB>number<TAB>review<TAB>merge state`,
-    one line per open, undrafted pull request.
+    """The hook's stdin, one line per open, undrafted pull request:
+    `slug<TAB>branch<TAB>number<TAB>review<TAB>merge state<TAB>unsatisfied`.
 
     Only the rows whose answer a glyph could show are sent. A merged, closed or
     drafted pull request, and a branch with none at all, are left out, so the
@@ -481,22 +501,52 @@ def signoff_input(prs):
     working whatever is added behind them. The verdict is not among them — it
     now carries the sign-off glyph itself, so passing it in would ask the hook
     to answer with what it was given.
+
+    `unsatisfied` names the required checks that have yet to pass, as
+    `name=RESULT` joined by `;`. `reviewDecision` alone cannot report a review
+    that a required check asks for and a bot has already approved: GitHub
+    answers APPROVED while the check stands at ACTION_REQUIRED. The check names
+    say which gate is open, and which of them means a human review is the
+    hook's business, not this plugin's.
+
+    It is empty where nothing is unsatisfied and where the plugin did not ask:
+    the second query covers the pull requests that report a failure or are
+    BLOCKED, which is every one a gate is holding, but not one the merge queue
+    is holding.
     """
     lines = []
     for pr in prs:
         if pr.get("number") is None or pr.get("state") != "OPEN" or pr.get("isDraft"):
             continue
         lines.append(
-            "%s\t%s\t%d\t%s\t%s\n"
+            "%s\t%s\t%d\t%s\t%s\t%s\n"
             % (
                 pr["slug"],
                 pr["branch"],
                 pr["number"],
                 pr.get("reviewDecision") or "",
                 pr.get("mergeStateStatus") or "",
+                unsatisfied_column(pr.get("required_unsatisfied") or ()),
             )
         )
     return "".join(lines)
+
+
+def unsatisfied_column(unsatisfied):
+    """[(name, result)] as `name=RESULT;name=RESULT`.
+
+    A check name is free text, so `;`, `=` and the column separators are
+    replaced by a space in it rather than allowed to shift a field. A hook
+    matching a name by substring reads the same either way.
+    """
+    return ";".join(
+        "%s=%s" % (column_safe(name), column_safe(result))
+        for name, result in unsatisfied
+    )
+
+
+def column_safe(text):
+    return re.sub(r"[;=\t\r\n]", " ", str(text)).strip()
 
 
 def parse_signoff(text):
@@ -715,10 +765,11 @@ def decide(prs, marks, icons=DEFAULT_ICONS, signoffs=None):
     """
     verdicts = {}
     for pr in prs:
-        failing, running, conversations = marks.get(
-            (pr["slug"], pr.get("number")), (False, False, False)
+        failing, running, unsatisfied, conversations = marks.get(
+            (pr["slug"], pr.get("number")), (False, False, (), False)
         )
         pr["required_failing"], pr["required_running"] = failing, running
+        pr["required_unsatisfied"] = unsatisfied
         pr["conversation_block"] = conversations
         pr["signoff"] = (signoffs or {}).get((pr["slug"], pr["branch"]), "")
         emoji = emoji_for(pr, icons)

@@ -81,6 +81,13 @@ def decide(prs, marks, icons=EMOJI, signoffs=None):
     return daemon.decide(prs, marks, icons, signoffs)
 
 
+def required_state(contexts, expected=()):
+    """(failing, running) — the two flags most of these tests are about. The
+    unsatisfied check names have tests of their own."""
+    failing, running, _ = daemon.required_state(contexts, expected)
+    return failing, running
+
+
 def fixture(name):
     with open(os.path.join(FIXTURES, name), "r", encoding="utf-8") as handle:
         return json.load(handle)
@@ -596,13 +603,13 @@ class RequiredChecks(unittest.TestCase):
 
     def test_recorded_pull_request_with_an_open_thread_has_no_check_to_blame(self):
         self.assertEqual(
-            daemon.required_state(self.contexts("p4"), self.expected("p4")),
+            required_state(self.contexts("p4"), self.expected("p4")),
             (False, False),
         )
 
     def test_recorded_optional_failure_is_not_a_failure(self):
         # p0: three required checks passed, an optional one was CANCELLED.
-        self.assertEqual(daemon.required_state(self.contexts("p0")), (False, False))
+        self.assertEqual(required_state(self.contexts("p0")), (False, False))
 
     def test_recorded_action_required_is_not_a_failure(self):
         # p1: the missing-review gate arrives as a required check whose
@@ -611,7 +618,7 @@ class RequiredChecks(unittest.TestCase):
             c.get("conclusion") for c in self.contexts("p1") if c.get("isRequired")
         ]
         self.assertIn("ACTION_REQUIRED", results)
-        self.assertEqual(daemon.required_state(self.contexts("p1")), (False, False))
+        self.assertEqual(required_state(self.contexts("p1")), (False, False))
 
     def test_recorded_rerun_is_judged_by_its_newest_attempt(self):
         # p2: four attempts of one required check; the newest passed, an earlier
@@ -623,14 +630,14 @@ class RequiredChecks(unittest.TestCase):
         ]
         self.assertEqual(len(attempts), 4)
         self.assertIn("CANCELLED", [c["conclusion"] for c in attempts])
-        self.assertEqual(daemon.required_state(self.contexts("p2")), (False, False))
+        self.assertEqual(required_state(self.contexts("p2")), (False, False))
 
     def test_newest_attempt_failing_is_a_failure(self):
         contexts = [
             check(conclusion="SUCCESS", completedAt="2026-09-01T10:00:00Z"),
             check(conclusion="FAILURE", completedAt="2026-09-01T11:00:00Z"),
         ]
-        self.assertEqual(daemon.required_state(contexts), (True, False))
+        self.assertEqual(required_state(contexts), (True, False))
 
     def test_attempt_in_flight_outranks_a_newer_completed_failure(self):
         # A queued run can report a startedAt days old, so time alone would let
@@ -639,7 +646,7 @@ class RequiredChecks(unittest.TestCase):
             check(conclusion="FAILURE", completedAt="2026-09-08T11:00:00Z"),
             check(status="QUEUED", startedAt="2026-09-01T09:00:00Z"),
         ]
-        self.assertEqual(daemon.required_state(contexts), (False, True))
+        self.assertEqual(required_state(contexts), (False, True))
 
     def test_pending_status_context_runs(self):
         contexts = [
@@ -651,7 +658,7 @@ class RequiredChecks(unittest.TestCase):
                 "isRequired": True,
             }
         ]
-        self.assertEqual(daemon.required_state(contexts), (False, True))
+        self.assertEqual(required_state(contexts), (False, True))
 
     def test_recorded_expected_context_that_never_reported_runs(self):
         # p3: four required contexts, one of which ("ci/checkpoint") had posted
@@ -661,28 +668,28 @@ class RequiredChecks(unittest.TestCase):
         names = [c.get("name") or c.get("context") for c in contexts]
         self.assertNotIn("ci/checkpoint", names)
         self.assertEqual(
-            daemon.required_state(contexts, self.expected("p3")), (False, True)
+            required_state(contexts, self.expected("p3")), (False, True)
         )
 
     def test_recorded_pull_request_without_branch_protection_keeps_its_verdict(self):
         # With no expected contexts, the checks that did report decide alone.
         self.assertEqual(self.expected("p0"), [])
-        self.assertEqual(daemon.required_state(self.contexts("p0"), []), (False, False))
+        self.assertEqual(required_state(self.contexts("p0"), []), (False, False))
 
     def test_expected_context_that_reported_does_not_run(self):
         contexts = [check(name="lint", conclusion="SUCCESS")]
-        self.assertEqual(daemon.required_state(contexts, ["lint"]), (False, False))
+        self.assertEqual(required_state(contexts, ["lint"]), (False, False))
 
     def test_expected_context_reported_as_optional_does_not_run(self):
         # Branch protection asks for the name, GitHub marks the run optional.
         # Counting it as unreported would pin the emoji to 🟡 for good.
         contexts = [check(name="lint", conclusion="SUCCESS", isRequired=False)]
-        self.assertEqual(daemon.required_state(contexts, ["lint"]), (False, False))
+        self.assertEqual(required_state(contexts, ["lint"]), (False, False))
 
     def test_expected_context_that_never_reported_beats_a_passing_sibling(self):
         contexts = [check(name="lint", conclusion="SUCCESS")]
         self.assertEqual(
-            daemon.required_state(contexts, ["lint", "unit-tests"]), (False, True)
+            required_state(contexts, ["lint", "unit-tests"]), (False, True)
         )
 
     def test_optional_checks_are_ignored(self):
@@ -690,7 +697,7 @@ class RequiredChecks(unittest.TestCase):
             check(conclusion="FAILURE", completedAt="2026-09-08T11:00:00Z", isRequired=False),
             check(status="IN_PROGRESS", name="other", isRequired=False),
         ]
-        self.assertEqual(daemon.required_state(contexts), (False, False))
+        self.assertEqual(required_state(contexts), (False, False))
 
 
 class Lookup(unittest.TestCase):
@@ -801,7 +808,7 @@ class Lookup(unittest.TestCase):
         ]
         data = {"p0": fixture("required_checks.json")["data"]["p3"]}
         marks = daemon.parse_required(data, [(APP, 104)])
-        self.assertEqual(marks, {(APP, 104): (False, True, False)})
+        self.assertEqual(marks, {(APP, 104): (False, True, [("ci/checkpoint", "EXPECTED")], False)})
         self.assertEqual(decide(prs, marks)[(APP, "feature/c-blocked")], "🟡")
 
     def test_recorded_missing_review_and_open_thread_read_together(self):
@@ -822,7 +829,7 @@ class Lookup(unittest.TestCase):
         ]
         data = {"p0": fixture("required_checks.json")["data"]["p4"]}
         marks = daemon.parse_required(data, [(APP, 106)])
-        self.assertEqual(marks, {(APP, 106): (False, False, True)})
+        self.assertEqual(marks, {(APP, 106): (False, False, [("required-review", "ACTION_REQUIRED")], True)})
         self.assertEqual(
             decide(prs, marks)[(APP, "feature/i-conversations")], "👀💬"
         )
@@ -929,15 +936,68 @@ class Signoff(unittest.TestCase):
         ]
         self.assertEqual(
             daemon.signoff_input(prs),
-            "%s\tfeature/open\t1\tAPPROVED\tCLEAN\n" % APP,
+            "%s\tfeature/open\t1\tAPPROVED\tCLEAN\t\n" % APP,
         )
+
+    def test_the_unsatisfied_required_checks_ride_along(self):
+        # The shape the recorded p4 has, and the one PAIR leaves behind: GitHub
+        # answers APPROVED while a required check still asks for a review.
+        prs = [
+            self.open_pr(
+                "feature/x",
+                mergeStateStatus="BLOCKED",
+                required_unsatisfied=[
+                    ("Required review", "ACTION_REQUIRED"),
+                    ("Test Results", "EXPECTED"),
+                ],
+            )
+        ]
+        self.assertEqual(
+            daemon.signoff_input(prs),
+            "%s\tfeature/x\t1\tAPPROVED\tBLOCKED"
+            "\tRequired review=ACTION_REQUIRED;Test Results=EXPECTED\n" % APP,
+        )
+
+    def test_a_check_name_cannot_shift_a_column(self):
+        # A check name is free text. Nothing in it may be read as a separator.
+        self.assertEqual(
+            daemon.unsatisfied_column([("a;b=c\td", "FAILURE")]), "a b c d=FAILURE"
+        )
+
+    def test_a_satisfied_required_check_is_not_named(self):
+        contexts = [
+            check(name="lint", conclusion="SUCCESS"),
+            check(name="flaky", conclusion="SKIPPED"),
+            check(name="advisory", conclusion="NEUTRAL"),
+            check(name="build", conclusion="FAILURE"),
+            check(name="review", conclusion="ACTION_REQUIRED"),
+        ]
+        self.assertEqual(
+            daemon.required_state(contexts)[2],
+            [("build", "FAILURE"), ("review", "ACTION_REQUIRED")],
+        )
+
+    def test_an_optional_check_is_not_named_however_it_ended(self):
+        contexts = [check(name="optional", conclusion="FAILURE", isRequired=False)]
+        self.assertEqual(daemon.required_state(contexts)[2], [])
+
+    def test_a_required_context_that_reported_nothing_is_expected(self):
+        contexts = [check(name="lint", conclusion="SUCCESS")]
+        self.assertEqual(
+            daemon.required_state(contexts, ["lint", "review"])[2],
+            [("review", "EXPECTED")],
+        )
+
+    def test_a_pull_request_the_plugin_did_not_ask_about_names_nothing(self):
+        prs = [self.open_pr("feature/x", mergeStateStatus="CLEAN")]
+        self.assertTrue(daemon.signoff_input(prs).endswith("\tCLEAN\t\n"))
 
     def test_nothing_to_ask_about_is_an_empty_input(self):
         self.assertEqual(daemon.signoff_input([{"number": None}]), "")
 
     def test_a_missing_field_is_an_empty_column(self):
         prs = [self.open_pr("feature/x", reviewDecision="", mergeStateStatus=None)]
-        self.assertEqual(daemon.signoff_input(prs), "%s\tfeature/x\t1\t\t\n" % APP)
+        self.assertEqual(daemon.signoff_input(prs), "%s\tfeature/x\t1\t\t\t\n" % APP)
 
     # ------------------------------------------------------- what it may answer
 

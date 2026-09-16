@@ -18,8 +18,9 @@ icons = "nerd"
 #
 # It is run once a cycle with no shell. Every open, undrafted pull request
 # arrives on its stdin as
-#   owner/name<TAB>branch<TAB>number<TAB>reviewDecision<TAB>mergeStateStatus
-# and it answers the ones it knows about, one per line, as
+#   owner/name<TAB>branch<TAB>number<TAB>reviewDecision<TAB>mergeStateStatus<TAB>unsatisfied
+# where `unsatisfied` names the required checks that have yet to pass, as
+# `name=RESULT` joined by ";", and it answers the ones it knows about, as
 #   owner/name<TAB>branch<TAB>not_required|missing|open|done
 #
 #   not_required -> ➖  nothing to sign off
