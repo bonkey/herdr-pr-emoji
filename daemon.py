@@ -123,8 +123,8 @@ NERD = {
     # so they tell each other apart by shape: the cell takes the blocker's
     # colour, and a glyph behind it is drawn in that same colour.
     "signoff_not_required": "\uF48B",  # oct-dash
-    "signoff_missing": "\uF512",  # oct-shield_slash
-    "signoff_open": "\uF49C",  # oct-shield
+    "signoff_missing": "\uF49C",  # oct-shield
+    "signoff_open": "\uF512",  # oct-shield_slash
     "signoff_done": "\uF510",  # oct-shield_check
 }
 ICON_SETS = {"emoji": EMOJI, "nerd": NERD}

@@ -270,8 +270,8 @@ the emoji this README names, which need no particular font.
 | mergeable | `oct-check_circle_fill` | ✅ |
 | conversation open | `oct-comment_discussion` | 💬 |
 | sign-off: none wanted | `oct-dash` | ➖ |
-| sign-off: missing | `oct-shield_slash` | 📭 |
-| sign-off: open | `oct-shield` | 🎫 |
+| sign-off: missing | `oct-shield` | 📭 |
+| sign-off: open | `oct-shield_slash` | 🎫 |
 | sign-off: done | `oct-shield_check` | 🏁 |
 
 The last four are drawn only where a [`signoffCommand`](#the-sign-off-glyph) reports them.
