@@ -234,7 +234,9 @@ The command holds whatever credentials it needs. The plugin passes none, reads n
 stores none: it has a path, a timeout and five columns of GitHub's own answer. `examples/`
 carries two of them — `pr-signoff-static`, which answers one fixed state to prove the wiring,
 and `pr-signoff-jira`, which reads the state of a review ticket with every specific of your
-team in an environment variable.
+team in an environment variable. The Jira one asks `curl` to make the request, because curl
+reads the system trust store a corporate proxy's certificate is installed in, and takes the
+credentials on its stdin so that no secret is ever an argument another process could read.
 
 One caveat about colour: a sidebar cell takes one colour, the first `contains` rule that
 matches, which is the blocker. A glyph behind it is drawn in that same colour, so the three

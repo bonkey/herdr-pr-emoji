@@ -29,6 +29,11 @@
 #
 # Every failure exits non-zero with a line on stderr, which the daemon logs.
 # Each row then keeps the glyph it has until its TTL runs out.
+#
+# `curl` makes the request rather than urllib: it reads the system trust store,
+# which is what a corporate proxy's certificate is installed in, and it honours
+# the HTTPS_PROXY environment. The credentials go to its stdin as a config
+# file, so no secret is ever an argument another process could read.
 
 import base64
 import json
@@ -36,9 +41,7 @@ import os
 import re
 import subprocess
 import sys
-import urllib.error
 import urllib.parse
-import urllib.request
 
 PULL_URL = re.compile(r"github\.com[:/]+([A-Za-z0-9._-]+/[A-Za-z0-9._-]+)/pull/(\d+)")
 PAGE = 100
@@ -83,40 +86,81 @@ def token():
     return value
 
 
+def get_json(url, auth):
+    """The JSON at `url`, fetched by curl with the credentials on its stdin.
+
+    A `--config` file is how curl takes a header without it becoming an
+    argument: an argument is readable by anybody who can list processes.
+    """
+    config = 'url = "%s"\nheader = "Authorization: Basic %s"\nheader = "Accept: application/json"\n' % (
+        url,
+        auth,
+    )
+    try:
+        done = subprocess.run(
+            ["curl", "--silent", "--show-error", "--fail-with-body", "--config", "-"],
+            input=config.encode("utf-8"),
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            timeout=TIMEOUT,
+        )
+    except (OSError, subprocess.SubprocessError) as error:
+        fail("curl: %s" % error)
+    if done.returncode != 0:
+        detail = done.stdout.decode("utf-8", "replace").strip() or done.stderr.decode(
+            "utf-8", "replace"
+        ).strip()
+        fail("curl exited %d: %s" % (done.returncode, detail.splitlines()[:1] or ""))
+    try:
+        body = json.loads(done.stdout.decode("utf-8", "replace"))
+    except ValueError:
+        detail = done.stdout.decode("utf-8", "replace").strip().splitlines()
+        fail("%s answered no JSON: %s" % (url.split("/rest/")[0], detail[:1] or ""))
+    if not isinstance(body, dict):
+        fail("%s answered no object" % url.split("/rest/")[0])
+    return body
+
+
 def search(base, jql, auth, pages):
     """Every candidate ticket, as (description, status category) pairs.
 
-    The v2 API is asked on purpose: it answers with the description as text,
-    where v3 answers with a document tree a regular expression cannot read.
+    `/rest/api/3/search/jql` is the only search Jira Cloud still answers, and
+    it pages by a cursor rather than by an offset: the token of the last answer
+    asks for the next page, and its absence means there was no next page.
+
+    It returns the description as an Atlassian document tree, so the pair
+    carries that tree serialised back to JSON rather than any text. A pull
+    request URL in it is either the text of a paragraph or the target of a
+    link, and both are strings in the tree — which is all `tickets_by_pull`
+    needs, because it reads the description with a regular expression.
     """
-    found, at = [], 0
+    found, token = [], ""
     for _ in range(pages):
-        query = urllib.parse.urlencode(
-            {
-                "jql": jql,
-                "fields": "status,description",
-                "maxResults": PAGE,
-                "startAt": at,
-            }
+        query = {"jql": jql, "fields": "status,description", "maxResults": PAGE}
+        if token:
+            query["nextPageToken"] = token
+        body = get_json(
+            "%s/rest/api/3/search/jql?%s"
+            % (base.rstrip("/"), urllib.parse.urlencode(query)),
+            auth,
         )
-        request = urllib.request.Request(
-            "%s/rest/api/2/search?%s" % (base.rstrip("/"), query),
-            headers={"Authorization": "Basic " + auth, "Accept": "application/json"},
-        )
-        try:
-            with urllib.request.urlopen(request, timeout=TIMEOUT) as answer:
-                body = json.load(answer)
-        except (urllib.error.URLError, OSError, ValueError) as error:
-            fail("%s: %s" % (base, error))
-        issues = body.get("issues") or []
-        for issue in issues:
+        if body.get("errorMessages") or body.get("errors"):
+            fail(
+                "%s: %s"
+                % (
+                    base,
+                    "; ".join(body.get("errorMessages") or [])
+                    or json.dumps(body.get("errors")),
+                )
+            )
+        for issue in body.get("issues") or []:
             fields = issue.get("fields") or {}
             category = ((fields.get("status") or {}).get("statusCategory") or {}).get(
                 "key"
             )
-            found.append((fields.get("description") or "", category or ""))
-        at += len(issues)
-        if not issues or at >= (body.get("total") or 0):
+            found.append((json.dumps(fields.get("description") or ""), category or ""))
+        token = body.get("nextPageToken") or ""
+        if not token:
             break
     return found
 
@@ -174,6 +218,14 @@ def main():
     except ValueError:
         pages = 3
     auth = base64.b64encode(("%s:%s" % (email, token())).encode("utf-8")).decode("ascii")
+
+    # The identity is asked for first, because a search Jira does not recognise
+    # the caller of answers 200 with an empty list rather than refusing: every
+    # pull request would then read as one no ticket names, which is a wrong
+    # answer where an error is the true one.
+    who = get_json("%s/rest/api/3/myself" % base.rstrip("/"), auth)
+    if not who.get("accountId"):
+        fail("%s does not recognise %s" % (base, email))
 
     states = tickets_by_pull(search(base, jql, auth, pages))
     for slug, branch, number, review, merge in rows:
