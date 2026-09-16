@@ -9,6 +9,8 @@
 #   python3 daemon.py --once               one cycle, then exit (manual refresh, development)
 #   python3 daemon.py --query owner/name   branches on stdin, "branch<TAB>emoji" on stdout
 #   python3 daemon.py --resolve            "owner/name<TAB>branch" on stdin, "…<TAB>emoji" out
+#   python3 daemon.py --sort               order the worktrees of every group by state, then name
+#   python3 daemon.py --sort-name          order the worktrees of every group by name
 #
 # Never calls the herdr API method `worktree.list`: herdr answers it by
 # enumerating git worktrees on its main thread. `workspace list` and
@@ -19,6 +21,7 @@ import os
 import re
 import shutil
 import signal
+import socket
 import subprocess
 import sys
 import time
@@ -51,6 +54,7 @@ CONFIG = os.path.join(
 )
 LOG = os.path.join(STATE, "daemon.log")
 PIDFILE = os.path.join(STATE, "daemon.pid")
+STATES = os.path.join(STATE, "states.json")
 LOG_LIMIT = 1000000
 
 DEFAULT_INTERVAL = 120
@@ -108,6 +112,33 @@ NERD = {
 }
 ICON_SETS = {"emoji": EMOJI, "nerd": NERD}
 DEFAULT_ICON_SET = "nerd"
+# The name of every state, as a glyph table: `blocker_for` reads its verdict
+# out of whatever table it is handed, so this one makes it answer with the
+# name rather than the glyph.
+STATE_NAMES = {name: name for name in EMOJI}
+
+# The order `--sort` puts a worktree group in: what a hand of yours is needed
+# for first, then what waits on somebody else, then what has no pull request
+# to speak of, then what is finished. A state the file does not record — a
+# row nobody has answered for yet, or one with nothing to say — goes last.
+SORT_ORDER = [
+    "mergeable",  # ✅ press the button
+    "unstable",  # 🆗 the same, once you decide the optional failures do not matter
+    "conflict",  # ⚠️ rebase it
+    "failing",  # ❌ fix it
+    "failing_growing",  # 🟠 fix it, and more may be coming
+    "ejected",  # 🪃 queue it again, once you know why it came back
+    "conversation",  # 💬 answer the threads
+    "blocked",  # 🛑 find out why
+    "review",  # 👀 somebody else's turn
+    "running",  # 🟡 CI's turn
+    "queued",  # 🚂 the queue's turn
+    "draft",  # 📝 not up for merging yet
+    "no_pr",  # ❔ not up for anything yet
+    "merged",  # 🟣 done
+    "closed",  # 🚪 done with
+]
+SORT_RANK = {name: rank for rank, name in enumerate(SORT_ORDER)}
 
 
 def icon_set(name, unstable):
@@ -338,8 +369,8 @@ def queue_ejection(node):
     return bool(reason) and reason not in ("merged", "manual")
 
 
-def emoji_for(pr, icons=DEFAULT_ICONS):
-    """The blocker, and 💬 after it when conversations are open too.
+def verdict_for(pr):
+    """(state, conversation): the blocker by name, and whether 💬 rides along.
 
     A missing review and an unresolved conversation are two errands for two
     people: the reviewer who has not looked yet, and whoever answers the
@@ -353,12 +384,20 @@ def emoji_for(pr, icons=DEFAULT_ICONS):
     already shows — and a draft swallows 💬 the way it swallows every other
     blocker.
     """
-    verdict = blocker_for(pr, icons)
-    if not verdict or pr.get("isDraft") or not pr.get("conversation_block"):
-        return verdict
-    if verdict == icons["blocked"]:
-        return icons["conversation"]
-    return verdict + icons["conversation"]
+    state = blocker_for(pr, STATE_NAMES)
+    if not state or pr.get("isDraft") or not pr.get("conversation_block"):
+        return state, False
+    if state == "blocked":
+        return "conversation", False
+    return state, True
+
+
+def emoji_for(pr, icons=DEFAULT_ICONS):
+    """The blocker's glyph, and 💬 after it when conversations are open too."""
+    state, conversation = verdict_for(pr)
+    if not state:
+        return ""
+    return icons[state] + (icons["conversation"] if conversation else "")
 
 
 def describe_errors(errors):
@@ -566,6 +605,39 @@ def decide(prs, marks, icons=DEFAULT_ICONS):
     return verdicts
 
 
+def states_of(prs, verdicts):
+    """{(slug, branch): state name} for the pull requests `decide` gave a verdict.
+
+    The name is what `--sort` ranks by, where the glyph is what the row shows:
+    the same state carries a different glyph in each icon set, and 🆗 borrows
+    ⚠️ or ✅ under the `unstable` setting, so the glyph alone cannot be read
+    back into a rank. An empty verdict records an empty name, which sorts last.
+    """
+    return {
+        (pr["slug"], pr["branch"]): verdict_for(pr)[0]
+        for pr in prs
+        if (pr["slug"], pr["branch"]) in verdicts
+    }
+
+
+def plan_states(rows, states, previous):
+    """{workspace_id: state name} to write after a cycle.
+
+    A branch GitHub did not answer for keeps the state it had, the way its
+    emoji keeps showing; a workspace that is gone is dropped, so the file never
+    outgrows the sidebar; a row with nothing to say records an empty name.
+    """
+    plan = {}
+    for workspace_id, slug, branch in rows:
+        if not slug or not branch:
+            plan[workspace_id] = ""
+        elif (slug, branch) in states:
+            plan[workspace_id] = states[(slug, branch)]
+        elif workspace_id in previous:
+            plan[workspace_id] = previous[workspace_id]
+    return plan
+
+
 def plan_publications(rows, verdicts):
     """[(workspace_id, emoji or None)] — None means publish nothing for that row.
 
@@ -607,7 +679,8 @@ def gh_graphql(query):
 
 
 def resolve(pairs, icons=DEFAULT_ICONS):
-    """{(slug, branch): emoji} for the branches GitHub answered for.
+    """({(slug, branch): emoji}, {(slug, branch): state}) for the branches
+    GitHub answered for.
 
     Every failure is contained: an unanswered branch is simply absent, and an
     unanswered required-check query only loses the ❌ and 🟡 verdicts of that
@@ -635,7 +708,8 @@ def resolve(pairs, icons=DEFAULT_ICONS):
                 "no required checks for %s, ❌ and 🟡 fall back to 🛑"
                 % ", ".join("%s#%d" % target for target in missing)
             )
-    return decide(prs, marks, icons)
+    verdicts = decide(prs, marks, icons)
+    return verdicts, states_of(prs, verdicts)
 
 
 def git_branch(path):
@@ -724,7 +798,8 @@ def cycle(interval, icons):
         rows.append((workspace_id, slug, branch))
 
     pairs = sorted({(slug, branch) for _, slug, branch in rows if slug and branch})
-    verdicts = resolve(pairs, icons) if pairs else {}
+    verdicts, states = resolve(pairs, icons) if pairs else ({}, {})
+    save_states(plan_states(rows, states, load_states()))
 
     ttl_ms = interval * 3 * 1000
     skipped = 0
@@ -773,13 +848,222 @@ def read_pairs(stream, slug=None):
 
 
 def print_verdicts(pairs, icons, with_slug):
-    verdicts = resolve(pairs, icons)
+    verdicts, _ = resolve(pairs, icons)
     for slug, branch in pairs:
         emoji = verdicts.get((slug, branch), "")
         if with_slug:
             print("%s\t%s\t%s" % (slug, branch, emoji))
         else:
             print("%s\t%s" % (branch, emoji))
+
+
+# ------------------------------------------------------------------- the sort
+
+
+def load_states():
+    """{workspace_id: state name} as the last cycle wrote it; empty without one."""
+    try:
+        with open(STATES, "r", encoding="utf-8") as handle:
+            document = json.load(handle)
+    except (OSError, ValueError):
+        return {}
+    states = document.get("states") if isinstance(document, dict) else None
+    if not isinstance(states, dict):
+        return {}
+    return {
+        key: value
+        for key, value in states.items()
+        if isinstance(key, str) and isinstance(value, str)
+    }
+
+
+def save_states(states):
+    """Write the states file whole, through a rename, so a sort that reads it
+    mid-cycle sees the last complete one."""
+    temporary = STATES + ".tmp"
+    try:
+        with open(temporary, "w", encoding="utf-8") as handle:
+            json.dump({"version": 1, "states": states}, handle, indent=2, sort_keys=True)
+        os.replace(temporary, STATES)
+    except OSError as exc:
+        log("states file: %s" % exc)
+        try:
+            os.remove(temporary)
+        except OSError:
+            pass
+
+
+def workspace_records(workspaces):
+    """Every workspace as `workspace list` reports it, in sidebar order."""
+    return [
+        workspace
+        for workspace in (workspaces.get("result") or {}).get("workspaces") or []
+        if workspace.get("workspace_id")
+    ]
+
+
+def repo_key(workspace):
+    """What holds a worktree parent and its children together in the sidebar.
+    Empty for a workspace without a worktree, which belongs to no group."""
+    worktree = workspace.get("worktree")
+    if not isinstance(worktree, dict):
+        return ""
+    value = worktree.get("repo_key")
+    return value if isinstance(value, str) else ""
+
+
+def is_child(workspace):
+    """True for a linked worktree. Only children are sorted; the parent of a
+    group keeps the top of its group."""
+    worktree = workspace.get("worktree")
+    if not isinstance(worktree, dict):
+        return False
+    return worktree.get("is_linked_worktree") is True
+
+
+def label_key(workspace):
+    """What a workspace sorts by when the name decides: its label, case folded."""
+    label = workspace.get("label")
+    return label.casefold() if isinstance(label, str) else ""
+
+
+def state_rank(states, workspace):
+    """What a workspace sorts by when the state decides: its rank in SORT_ORDER,
+    and one past the end for a state the file does not know."""
+    return SORT_RANK.get(states.get(workspace.get("workspace_id", ""), ""), len(SORT_ORDER))
+
+
+def by_state(states):
+    """The key for `--sort`: state first, name inside a state."""
+    return lambda workspace: (state_rank(states, workspace), label_key(workspace))
+
+
+def by_name():
+    """The key for `--sort-name`."""
+    return label_key
+
+
+def group_order(members, key):
+    """One worktree group in order: the parent first, then the children by `key`.
+    The sort is stable, so children the key cannot tell apart keep their order."""
+    parents = [member for member in members if not is_child(member)]
+    children = [member for member in members if is_child(member)]
+    children.sort(key=key)
+    return parents + children
+
+
+def apply_move(order, request):
+    """`order` with one workspace.move_block request applied: what it names
+    comes out and goes back in front of before_workspace_id, or at the end when
+    that is null."""
+    moved = list(request["workspace_ids"])
+    rest = [found for found in order if found not in set(moved)]
+    before = request.get("before_workspace_id")
+    at = rest.index(before) if before in rest else len(rest)
+    return rest[:at] + moved + rest[at:]
+
+
+def move_requests(records, key):
+    """The workspace.move_block requests that put every worktree group in the
+    order `key` asks for, in the order they have to be sent.
+
+    Each request moves one workspace, because herdr does not promise to keep
+    the order of a list of several. A group lands as one block where its first
+    member is now, so a workspace of another group that sits between two
+    members ends up after the block.
+    """
+    order = [record.get("workspace_id", "") for record in records]
+    requests = []
+    for group in dict.fromkeys(repo_key(record) for record in records):
+        if not group:
+            continue
+        members = [record for record in records if repo_key(record) == group]
+        wanted = [member.get("workspace_id", "") for member in group_order(members, key)]
+        held = set(wanted)
+        places = [at for at, found in enumerate(order) if found in held]
+        packed = places[-1] - places[0] == len(places) - 1
+        if packed and [order[at] for at in places] == wanted:
+            continue
+        after = [found for found in order[places[0] :] if found not in held]
+        plan = [
+            {
+                "workspace_ids": [wanted[-1]],
+                "before_workspace_id": after[0] if after else None,
+            }
+        ]
+        for at in range(len(wanted) - 2, -1, -1):
+            plan.append(
+                {"workspace_ids": [wanted[at]], "before_workspace_id": wanted[at + 1]}
+            )
+        for request in plan:
+            order = apply_move(order, request)
+        requests += plan
+    return requests
+
+
+def read_reply(client):
+    """The first line herdr answers with. The reply ends at the newline, not at
+    end of stream."""
+    buffer = b""
+    while b"\n" not in buffer:
+        chunk = client.recv(65536)
+        if not chunk:
+            break
+        buffer += chunk
+    return buffer.decode("utf-8", "replace").split("\n", 1)[0]
+
+
+def socket_request(request_id, method, params):
+    """(ok, reply) for one request to the herdr API socket. The socket carries
+    methods the command line does not, which is how a workspace is moved.
+    Newline-delimited JSON, one line each way."""
+    path = os.environ.get("HERDR_SOCKET_PATH")
+    if not path:
+        log("HERDR_SOCKET_PATH is not set; run this under herdr")
+        return False, {}
+    request = json.dumps({"id": request_id, "method": method, "params": params})
+    try:
+        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client:
+            client.settimeout(HERDR_TIMEOUT)
+            client.connect(path)
+            client.sendall((request + "\n").encode("utf-8"))
+            reply = read_reply(client)
+    except OSError as error:
+        log("%s: %s" % (path, error))
+        return False, {}
+    try:
+        answer = json.loads(reply)
+    except ValueError:
+        answer = None
+    if not isinstance(answer, dict) or "result" not in answer:
+        detail = (answer or {}).get("error") if isinstance(answer, dict) else None
+        log("%s: %s" % (method, detail or reply.strip() or "no reply"))
+        return False, {}
+    return True, answer
+
+
+def sort_workspaces(what):
+    """Order the worktrees of every group by state (`what` = "state") or by
+    name. No token changes; only the sidebar order moves."""
+    workspaces = herdr_json("workspace", "list")
+    records = workspace_records(workspaces) if workspaces else []
+    if not records:
+        log("workspace list is empty; sorted nothing")
+        return False
+    key = by_state(load_states()) if what == "state" else by_name()
+    requests = move_requests(records, key)
+    if not requests:
+        log("sort by %s: already in order" % what)
+        return True
+    for number, request in enumerate(requests, start=1):
+        ok, _ = socket_request(
+            "pr-emoji:sort:%d" % number, "workspace.move_block", request
+        )
+        if not ok:
+            log("sort by %s: stopped after %d of %d moves" % (what, number - 1, len(requests)))
+            return False
+    log("sort by %s: %d moves" % (what, len(requests)))
+    return True
 
 
 def take_over_pidfile():
@@ -853,11 +1137,16 @@ def main(argv):
         pass
     interval, icons = read_config(CONFIG)
 
+    command = argv[0] if argv else ""
+    if command in ("--sort", "--sort-name"):
+        # The sort reads the last cycle's states file and herdr's own list;
+        # it asks GitHub nothing, so it needs no `gh`.
+        return 0 if sort_workspaces("state" if command == "--sort" else "name") else 1
+
     if not shutil.which("gh"):
         log("gh is required; not starting")
         return 0
 
-    command = argv[0] if argv else ""
     if command == "--query":
         if len(argv) < 2 or "/" not in argv[1]:
             log("usage: daemon.py --query owner/name")

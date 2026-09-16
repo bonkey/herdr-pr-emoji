@@ -33,6 +33,23 @@ so after installing either restart herdr or run it once by hand:
 
     herdr plugin action invoke bonkey.pr-emoji.refresh
 
+Two more actions [sort the worktrees](#sorting-worktrees) of every repository, by that state
+or by name. Bind them to keys in the same `config.toml`:
+
+    [[keys.command]]
+    key = "prefix+alt+s"
+    type = "plugin_action"
+    command = "bonkey.pr-emoji.sort"
+    description = "sort worktrees by PR state"
+
+    [[keys.command]]
+    key = "prefix+alt+n"
+    type = "plugin_action"
+    command = "bonkey.pr-emoji.sort-name"
+    description = "sort worktrees by name"
+
+All three are also in the workspace right-click menu.
+
 ## State mapping
 
 The decisive fields are GitHub's `mergeStateStatus` and `reviewDecision`, plus whether a
@@ -245,6 +262,40 @@ about which state won.
 The colours above are a starting point, not a decision this plugin makes: they live in your
 config, so pick your own. The emoji set needs no rules — it carries its colour already.
 
+## Sorting worktrees
+
+`bonkey.pr-emoji.sort` puts the worktrees of every repository in the order of the state they
+show: what needs your hand first, then what waits on somebody else, then what has no pull
+request to speak of, then what is finished. Inside one state the name decides.
+
+| First | ✅ 🆗 ⚠️ ❌ 🟠 🪃 💬 🛑 | merge it, fix it, answer it, find out why |
+|---|---|---|
+| then | 👀 🟡 🚂 | a reviewer's, CI's or the queue's turn |
+| then | 📝 ❔ | not up for merging yet |
+| last | 🟣 🚪 | done |
+
+A row that shows nothing — no branch, a remote that is not GitHub, a closed pull request on
+the trunk, or a branch GitHub has yet to answer for — goes after all of those.
+`bonkey.pr-emoji.sort-name` orders the same groups by name alone, case folded.
+
+The parent of a group keeps the top of its group, and two worktrees the key cannot tell apart
+keep the order they have, so a sort only moves what the key asks for. A workspace without a
+worktree is left where it is.
+
+    before                        after
+       ios-sdk                       ios-sdk
+    🟡 MSP2-153                   ✅ MSP2-143
+    🟣 MSP2-155                   ❌ MSP2-132
+    ✅ MSP2-143                   🟡 MSP2-153
+    ❌ MSP2-132                   🟣 MSP2-155
+
+Both sorts read `states.json` next to the log, which every cycle rewrites with the state of
+each workspace by name — the glyph on the row cannot be read back, since 🆗 borrows ⚠️ or ✅
+under `unstable` and each icon set draws every state differently. They ask GitHub nothing, so
+a sort is instant and orders by what the sidebar shows; invoke `refresh` first when that is
+older than you like. The moves go over herdr's API socket, which every plugin command is given,
+and no token changes: only the sidebar order moves.
+
 ## How it polls
 
 One long-lived loop, started with the server. Each cycle:
@@ -290,7 +341,7 @@ polls in parallel with the one the server starts.
     unstable = "ok"                # UNSTABLE: "ok" 🆗, "pass" ✅, "warn" ⚠️
     icons = "nerd"                 # "nerd" Octicons (default), or "emoji"
 
-Logs and the pid file: `~/.local/state/herdr/plugins/bonkey.pr-emoji/`, so the log is `~/.local/state/herdr/plugins/bonkey.pr-emoji/daemon.log`.
+Logs, the pid file and the states file the sorts read: `~/.local/state/herdr/plugins/bonkey.pr-emoji/`, so the log is `~/.local/state/herdr/plugins/bonkey.pr-emoji/daemon.log`.
 
 The server passes both directories in `HERDR_PLUGIN_CONFIG_DIR` and `HERDR_PLUGIN_STATE_DIR`, and a daemon started by hand resolves the same two paths itself, under `$XDG_CONFIG_HOME` and `$XDG_STATE_HOME` where those are set. So a hand-launched copy reads the same `config.toml` and finds the running daemon in the same pid file.
 
@@ -305,9 +356,12 @@ development launch the loop by hand and check what it publishes with `herdr api 
     python3 daemon.py --once                                # one cycle against the running herdr
     printf 'main\nfeature/x\n' | python3 daemon.py --query owner/name   # branch<TAB>emoji, no herdr needed
     printf 'o/r\tmain\no2/r2\tfix\n' | python3 daemon.py --resolve    # several repositories at once
+    python3 daemon.py --sort                                # by state, then name; needs HERDR_SOCKET_PATH
+    python3 daemon.py --sort-name                           # by name
 
-The emoji decisions, the two GraphQL queries and the publishing plan are pure functions with
-tests over GraphQL responses recorded from real pull requests, under `fixtures/`:
+The emoji decisions, the two GraphQL queries, the publishing plan and the moves a sort plans
+are pure functions with tests over GraphQL responses recorded from real pull requests, under
+`fixtures/`; the two sorts also run end to end against a stub herdr and a stub API socket:
 
     python3 -m unittest
 

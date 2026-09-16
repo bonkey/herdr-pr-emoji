@@ -25,7 +25,12 @@
 
 import json
 import os
+import socket
+import stat
+import subprocess
+import sys
 import tempfile
+import threading
 import unittest
 from unittest import mock
 
@@ -920,6 +925,473 @@ class GuardedCycle(unittest.TestCase):
             self.assertTrue(daemon.guarded_cycle(120, "pass"))
         finally:
             daemon.cycle = original
+
+
+class Verdicts(unittest.TestCase):
+    """The state by name, which the sort ranks by where the row shows a glyph."""
+
+    def test_the_name_and_the_glyph_agree(self):
+        for pr in (
+            {"number": None},
+            {"number": 1, "state": "MERGED"},
+            {"number": 1, "state": "OPEN", "isDraft": True},
+            {"number": 1, "state": "OPEN", "mergeStateStatus": "DIRTY"},
+            {"number": 1, "state": "OPEN", "mergeStateStatus": "CLEAN"},
+            {"number": 1, "state": "OPEN", "mergeStateStatus": "UNSTABLE"},
+        ):
+            state, conversation = daemon.verdict_for(pr)
+            self.assertFalse(conversation)
+            self.assertEqual(EMOJI[state], emoji_for(pr))
+
+    def test_open_conversations_ride_along_by_name(self):
+        pr = {
+            "number": 1,
+            "state": "OPEN",
+            "mergeStateStatus": "BLOCKED",
+            "reviewDecision": "REVIEW_REQUIRED",
+            "conversation_block": True,
+        }
+        self.assertEqual(daemon.verdict_for(pr), ("review", True))
+
+    def test_open_conversations_explain_a_block_by_name(self):
+        pr = {
+            "number": 1,
+            "state": "OPEN",
+            "mergeStateStatus": "BLOCKED",
+            "conversation_block": True,
+        }
+        self.assertEqual(daemon.verdict_for(pr), ("conversation", False))
+
+    def test_an_unknown_merge_state_has_no_name(self):
+        pr = {"number": 1, "state": "OPEN", "mergeStateStatus": "UNKNOWN"}
+        self.assertEqual(daemon.verdict_for(pr), ("", False))
+
+    def test_every_named_state_has_a_rank_and_nothing_else_does(self):
+        self.assertEqual(sorted(daemon.SORT_ORDER), sorted(EMOJI))
+
+    def test_states_follow_the_verdicts(self):
+        prs, _ = daemon.parse_lookup(fixture("lookup.json")["data"], PAIRS)
+        targets = daemon.required_targets(prs)
+        marks = daemon.parse_required(fixture("required_checks.json")["data"], targets)
+        verdicts = decide(prs, marks)
+        states = daemon.states_of(prs, verdicts)
+        self.assertEqual(sorted(states), sorted(verdicts))
+        self.assertEqual(states[(APP, "feature/a-clean")], "mergeable")
+        self.assertEqual(states[(APP, "feature/c-blocked")], "blocked")
+        self.assertEqual(states[(APP, "feature/d-unstable")], "unstable")
+        self.assertEqual(states[(APP, "main")], "")
+        self.assertEqual(states[(SERVICE, "no-pr")], "no_pr")
+
+    def test_a_pull_request_without_a_verdict_records_no_state(self):
+        prs = [
+            {
+                "slug": APP,
+                "branch": "feature/unknown",
+                "number": 1,
+                "state": "OPEN",
+                "mergeStateStatus": "UNKNOWN",
+            }
+        ]
+        verdicts = decide(prs, {})
+        self.assertEqual(verdicts, {})
+        self.assertEqual(daemon.states_of(prs, verdicts), {})
+
+    def test_the_states_file_follows_the_publishing_plan(self):
+        rows = [
+            ("w1", APP, "feature/a-clean"),
+            ("w2", APP, "feature/unanswered"),
+            ("w3", APP, "feature/never-answered"),
+            ("w4", "", ""),
+        ]
+        states = {(APP, "feature/a-clean"): "mergeable"}
+        previous = {"w2": "running", "w9": "merged"}
+        self.assertEqual(
+            daemon.plan_states(rows, states, previous),
+            {"w1": "mergeable", "w2": "running", "w4": ""},
+        )
+
+
+IOS = "/repos/ios-sdk/.git"
+KMP = "/repos/shared-kmp/.git"
+
+
+def worktree_records(workspaces):
+    """Workspace records as `workspace list` reports them for worktree groups.
+    Each entry is (id, label, repo key, linked); an empty repo key makes a
+    workspace with no worktree at all."""
+    records = []
+    for workspace_id, label, repo, linked in workspaces:
+        record = {"workspace_id": workspace_id, "label": label}
+        if repo:
+            record["worktree"] = {
+                "checkout_path": "/checkouts/" + workspace_id,
+                "repo_key": repo,
+                "is_linked_worktree": linked,
+            }
+        records.append(record)
+    return records
+
+
+def worktree_list(workspaces):
+    return {"result": {"type": "workspace_list", "workspaces": worktree_records(workspaces)}}
+
+
+def order_after(records, key):
+    """The order the plan for `records` leaves the sidebar in."""
+    found = [record["workspace_id"] for record in records]
+    for request in daemon.move_requests(records, key):
+        found = daemon.apply_move(found, request)
+    return found
+
+
+class SortPlan(unittest.TestCase):
+    """The moves a sort plans, without herdr and without a socket."""
+
+    def ios(self, children):
+        """The ios group: its parent, then a child per (id, label) in `children`."""
+        records = [("p", "ios-sdk", IOS, False)]
+        records += [(found, label, IOS, True) for found, label in children]
+        return worktree_records(records)
+
+    def test_children_sort_by_state_in_the_documented_order(self):
+        records = self.ios([("a", "a"), ("b", "b"), ("c", "c"), ("d", "d"), ("e", "e")])
+        states = {"a": "running", "b": "merged", "c": "mergeable", "d": "failing", "e": "draft"}
+        self.assertEqual(
+            order_after(records, daemon.by_state(states)), ["p", "c", "d", "a", "e", "b"]
+        )
+
+    def test_the_whole_order_is_what_the_readme_says(self):
+        children = [(name, name) for name in daemon.SORT_ORDER]
+        records = self.ios(list(reversed(children)))
+        states = {name: name for name in daemon.SORT_ORDER}
+        self.assertEqual(
+            order_after(records, daemon.by_state(states)), ["p"] + daemon.SORT_ORDER
+        )
+
+    def test_a_state_the_file_does_not_know_sorts_last(self):
+        records = self.ios([("a", "a"), ("b", "b"), ("c", "c")])
+        states = {"a": "", "c": "closed"}
+        self.assertEqual(order_after(records, daemon.by_state(states)), ["p", "c", "a", "b"])
+
+    def test_the_name_decides_inside_a_state(self):
+        records = self.ios([("a", "MSP2-153"), ("b", "msp2-132"), ("c", "MSP2-143")])
+        states = {"a": "mergeable", "b": "mergeable", "c": "mergeable"}
+        self.assertEqual(order_after(records, daemon.by_state(states)), ["p", "b", "c", "a"])
+
+    def test_the_name_sort_ignores_the_state(self):
+        records = self.ios([("a", "zeta"), ("b", "Alpha"), ("c", "mid")])
+        self.assertEqual(order_after(records, daemon.by_name()), ["p", "b", "c", "a"])
+
+    def test_the_parent_keeps_the_top_of_its_group(self):
+        records = self.ios([("a", "a")])
+        states = {"p": "merged", "a": "mergeable"}
+        self.assertEqual(order_after(records, daemon.by_state(states)), ["p", "a"])
+
+    def test_the_same_key_keeps_the_order_the_group_has(self):
+        records = self.ios([("a", "same"), ("b", "same"), ("c", "same")])
+        states = {"a": "review", "b": "review", "c": "review"}
+        self.assertEqual(daemon.move_requests(records, daemon.by_state(states)), [])
+
+    def test_a_group_already_in_order_moves_nothing(self):
+        records = self.ios([("a", "a"), ("b", "b")])
+        states = {"a": "mergeable", "b": "merged"}
+        self.assertEqual(daemon.move_requests(records, daemon.by_state(states)), [])
+
+    def test_each_request_moves_one_workspace(self):
+        records = self.ios([("a", "a"), ("b", "b")])
+        requests = daemon.move_requests(records, daemon.by_state({"b": "mergeable"}))
+        self.assertTrue(requests)
+        for request in requests:
+            self.assertEqual(len(request["workspace_ids"]), 1)
+
+    def test_a_group_whose_parent_is_not_open_sorts_its_children(self):
+        records = worktree_records([("a", "a", IOS, True), ("b", "b", IOS, True)])
+        states = {"a": "merged", "b": "review"}
+        self.assertEqual(order_after(records, daemon.by_state(states)), ["b", "a"])
+
+    def test_a_workspace_without_a_worktree_stays_where_it_is(self):
+        records = worktree_records(
+            [
+                ("x", "x", "", False),
+                ("p", "ios-sdk", IOS, False),
+                ("a", "a", IOS, True),
+                ("b", "b", IOS, True),
+            ]
+        )
+        states = {"x": "mergeable", "a": "merged", "b": "review"}
+        self.assertEqual(order_after(records, daemon.by_state(states)), ["x", "p", "b", "a"])
+
+    def test_every_group_sorts_on_its_own(self):
+        records = worktree_records(
+            [
+                ("p", "ios-sdk", IOS, False),
+                ("a", "a", IOS, True),
+                ("b", "b", IOS, True),
+                ("q", "shared-kmp", KMP, False),
+                ("c", "c", KMP, True),
+                ("d", "d", KMP, True),
+            ]
+        )
+        states = {"a": "closed", "b": "running", "c": "draft", "d": "conflict"}
+        self.assertEqual(
+            order_after(records, daemon.by_state(states)), ["p", "b", "a", "q", "d", "c"]
+        )
+
+    def test_a_workspace_between_two_members_ends_up_after_the_block(self):
+        records = worktree_records(
+            [
+                ("p", "ios-sdk", IOS, False),
+                ("a", "a", IOS, True),
+                ("x", "x", "", False),
+                ("b", "b", IOS, True),
+            ]
+        )
+        states = {"a": "merged", "b": "mergeable"}
+        self.assertEqual(order_after(records, daemon.by_state(states)), ["p", "b", "a", "x"])
+
+    def test_states_of_a_workspace_that_is_not_open_are_ignored(self):
+        records = self.ios([("a", "a"), ("b", "b")])
+        states = {"w27": "mergeable", "a": "merged", "b": "review"}
+        self.assertEqual(order_after(records, daemon.by_state(states)), ["p", "b", "a"])
+
+    def test_a_group_of_one_moves_nothing(self):
+        records = worktree_records([("p", "ios-sdk", IOS, False)])
+        self.assertEqual(daemon.move_requests(records, daemon.by_state({"p": "merged"})), [])
+
+
+class StatesFile(unittest.TestCase):
+    def setUp(self):
+        self.directory = tempfile.mkdtemp(prefix="pr-emoji-states-")
+        self.addCleanup(lambda: __import__("shutil").rmtree(self.directory, ignore_errors=True))
+        self.path = os.path.join(self.directory, "states.json")
+        patcher = mock.patch.object(daemon, "STATES", self.path)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def test_what_is_saved_is_what_is_loaded(self):
+        daemon.save_states({"w1": "mergeable", "w2": ""})
+        self.assertEqual(daemon.load_states(), {"w1": "mergeable", "w2": ""})
+        self.assertFalse(os.path.exists(self.path + ".tmp"))
+
+    def test_no_file_is_no_states(self):
+        self.assertEqual(daemon.load_states(), {})
+
+    def test_a_file_that_is_not_ours_is_no_states(self):
+        for text in ("", "not json", "[]", '{"states": []}', '{"states": {"w1": 3}}'):
+            with open(self.path, "w", encoding="utf-8") as handle:
+                handle.write(text)
+            self.assertEqual(daemon.load_states(), {})
+
+
+SCRIPT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "daemon.py")
+
+# A stand-in for `herdr`: answers `workspace list` from a file and refuses
+# everything else, so a sort that tried to publish would fail loudly. It names
+# this interpreter outright, so it runs with no PATH at all.
+STUB = """#!""" + sys.executable + """
+import os
+import sys
+
+argv = sys.argv[1:]
+if argv[:2] == ["workspace", "list"]:
+    sys.stdout.write(open(os.environ["WORKSPACES"], encoding="utf-8").read())
+elif argv[:2] == ["pane", "list"]:
+    sys.stdout.write('{"result": {"type": "pane_list", "panes": []}}')
+else:
+    with open(os.environ["CALLS"], "a", encoding="utf-8") as handle:
+        handle.write(" ".join(argv) + "\\n")
+    sys.exit(1)
+"""
+
+
+class SocketStub(object):
+    """A stand-in for the herdr API socket. Records every request it receives and
+    answers each one with an empty result."""
+
+    def __init__(self, case):
+        self.path = os.path.join(socket_dir(case), "herdr.sock")
+        self.requests = []
+        self.server = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        self.server.bind(self.path)
+        self.server.listen(16)
+        case.addCleanup(self.close)
+        self.thread = threading.Thread(target=self._serve)
+        self.thread.daemon = True
+        self.thread.start()
+
+    def close(self):
+        self.server.close()
+
+    def methods(self):
+        return [request.get("method") for request in self.requests]
+
+    def params(self):
+        return [request.get("params") for request in self.requests]
+
+    def _serve(self):
+        while True:
+            try:
+                connection, _ = self.server.accept()
+            except OSError:
+                return
+            try:
+                stream = connection.makefile("rwb")
+                line = stream.readline()
+                if line:
+                    request = json.loads(line.decode("utf-8"))
+                    self.requests.append(request)
+                    answer = {"id": request.get("id", ""), "result": {}}
+                    stream.write((json.dumps(answer) + "\n").encode("utf-8"))
+                    stream.flush()
+            except (OSError, ValueError):
+                pass
+            finally:
+                connection.close()
+
+
+def socket_dir(case):
+    """A short folder to bind a unix socket in: the whole path has to fit in
+    about a hundred bytes, which a deep TMPDIR does not always allow."""
+    import shutil
+
+    for base in ("/tmp", tempfile.gettempdir()):
+        if not os.path.isdir(base):
+            continue
+        try:
+            directory = tempfile.mkdtemp(prefix="pre-", dir=base)
+        except OSError:
+            continue
+        case.addCleanup(lambda: shutil.rmtree(directory, ignore_errors=True))
+        if len(os.path.join(directory, "herdr.sock").encode("utf-8")) < 100:
+            return directory
+    raise RuntimeError("no folder short enough for a unix socket")
+
+
+class SortEndToEnd(unittest.TestCase):
+    """What `--sort` and `--sort-name` send over the socket, run as herdr runs
+    them: a fresh process, a stub herdr on HERDR_BIN_PATH, the states file the
+    daemon would have left, and a stub socket in HERDR_SOCKET_PATH."""
+
+    def setUp(self):
+        import shutil
+
+        self.root = tempfile.mkdtemp(prefix="pr-emoji-sort-")
+        self.addCleanup(lambda: shutil.rmtree(self.root, ignore_errors=True))
+        self.state = os.path.join(self.root, "state")
+        os.makedirs(self.state)
+        self.calls = os.path.join(self.root, "calls")
+        self.workspaces = os.path.join(self.root, "workspaces.json")
+        stub = os.path.join(self.root, "herdr")
+        with open(stub, "w", encoding="utf-8") as handle:
+            handle.write(STUB)
+        os.chmod(stub, os.stat(stub).st_mode | stat.S_IXUSR)
+        self.socket = SocketStub(self)
+        self.env = {
+            "PATH": os.environ.get("PATH", ""),
+            "HOME": self.root,
+            "HERDR_BIN_PATH": stub,
+            "HERDR_PLUGIN_CONFIG_DIR": os.path.join(self.root, "config"),
+            "HERDR_PLUGIN_STATE_DIR": self.state,
+            "HERDR_SOCKET_PATH": self.socket.path,
+            "WORKSPACES": self.workspaces,
+            "CALLS": self.calls,
+        }
+        self.given_worktrees(
+            [
+                ("w1", "ios-sdk", IOS, False),
+                ("w2", "MSP2-153", IOS, True),
+                ("w3", "MSP2-101", IOS, True),
+                ("w4", "MSP2-143", IOS, True),
+            ]
+        )
+        # By state: w4 w2 w3. By name: w3 w4 w2. The two orders share nothing.
+        self.given_states({"w2": "running", "w3": "merged", "w4": "mergeable"})
+
+    def given_worktrees(self, workspaces):
+        with open(self.workspaces, "w", encoding="utf-8") as handle:
+            json.dump(worktree_list(workspaces), handle)
+
+    def given_states(self, states):
+        with open(os.path.join(self.state, "states.json"), "w", encoding="utf-8") as handle:
+            json.dump({"version": 1, "states": states}, handle)
+
+    def run_daemon(self, args):
+        done = subprocess.run(
+            [sys.executable, SCRIPT] + args,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            env=self.env,
+            timeout=60,
+        )
+        return done.returncode, done.stderr.decode("utf-8", "replace")
+
+    def ordered(self):
+        found = ["w1", "w2", "w3", "w4"]
+        for params in self.socket.params():
+            found = daemon.apply_move(found, params)
+        return found
+
+    def test_a_sort_puts_the_mergeable_worktree_first_and_the_merged_one_last(self):
+        code, _ = self.run_daemon(["--sort"])
+        self.assertEqual(code, 0)
+        self.assertEqual(set(self.socket.methods()), {"workspace.move_block"})
+        self.assertEqual(self.ordered(), ["w1", "w4", "w2", "w3"])
+
+    def test_a_sort_by_name_ignores_the_states(self):
+        code, _ = self.run_daemon(["--sort-name"])
+        self.assertEqual(code, 0)
+        self.assertEqual(self.ordered(), ["w1", "w3", "w4", "w2"])
+
+    def test_a_sort_publishes_no_token_and_needs_no_gh(self):
+        self.env["PATH"] = ""
+        code, _ = self.run_daemon(["--sort"])
+        self.assertEqual(code, 0)
+        self.assertFalse(os.path.exists(self.calls))
+
+    def test_a_group_already_in_order_sends_nothing(self):
+        self.given_states({"w2": "mergeable", "w3": "review", "w4": "merged"})
+        code, _ = self.run_daemon(["--sort"])
+        self.assertEqual(code, 0)
+        self.assertEqual(self.socket.requests, [])
+
+    def test_a_sort_without_states_still_orders_by_name(self):
+        os.remove(os.path.join(self.state, "states.json"))
+        code, _ = self.run_daemon(["--sort"])
+        self.assertEqual(code, 0)
+        self.assertEqual(self.ordered(), ["w1", "w3", "w4", "w2"])
+
+    def test_a_sort_without_a_socket_fails(self):
+        del self.env["HERDR_SOCKET_PATH"]
+        code, err = self.run_daemon(["--sort"])
+        self.assertEqual(code, 1)
+        self.assertIn("HERDR_SOCKET_PATH", err)
+
+    def test_a_sort_that_the_socket_refuses_fails(self):
+        self.socket.close()
+        code, _ = self.run_daemon(["--sort"])
+        self.assertEqual(code, 1)
+
+    def test_an_empty_workspace_list_fails(self):
+        self.given_worktrees([])
+        code, _ = self.run_daemon(["--sort"])
+        self.assertEqual(code, 1)
+        self.assertEqual(self.socket.requests, [])
+
+    def test_a_cycle_writes_the_states_file_the_sort_reads(self):
+        # A cycle over workspaces without a checkout has nothing to ask GitHub,
+        # so it runs without `gh` being called and records an empty name each.
+        self.given_worktrees([("w1", "ios-sdk", "", False)])
+        os.remove(os.path.join(self.state, "states.json"))
+        self.env["PATH"] = os.path.join(self.root, "bin")
+        os.makedirs(self.env["PATH"])
+        gh = os.path.join(self.env["PATH"], "gh")
+        with open(gh, "w", encoding="utf-8") as handle:
+            handle.write("#!/bin/sh\nexit 1\n")
+        os.chmod(gh, os.stat(gh).st_mode | stat.S_IXUSR)
+        code, _ = self.run_daemon(["--once"])
+        self.assertEqual(code, 0)
+        with open(os.path.join(self.state, "states.json"), encoding="utf-8") as handle:
+            self.assertEqual(json.load(handle), {"version": 1, "states": {"w1": ""}})
 
 
 class Queries(unittest.TestCase):
