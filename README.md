@@ -204,7 +204,7 @@ optional command reports that state, and one more glyph carries it behind the bl
 |---|---|---|
 | ✅➖ | nothing to sign off | `oct-dash` |
 | ✅📭 | a sign-off is wanted and nobody has asked for one | `oct-shield` |
-| ✅🎫 | asked for, not finished | `oct-shield_slash` |
+| ✅🎫 | asked for, not finished | `oct-shield_x` |
 | ✅🏁 | finished | `oct-shield_check` |
 
 **What the state means is the command's business, not this plugin's.** It runs once a cycle,
@@ -271,7 +271,7 @@ the emoji this README names, which need no particular font.
 | conversation open | `oct-comment_discussion` | 💬 |
 | sign-off: none wanted | `oct-dash` | ➖ |
 | sign-off: missing | `oct-shield` | 📭 |
-| sign-off: open | `oct-shield_slash` | 🎫 |
+| sign-off: open | `oct-shield_x` | 🎫 |
 | sign-off: done | `oct-shield_check` | 🏁 |
 
 The last four are drawn only where a [`signoffCommand`](#the-sign-off-glyph) reports them.
