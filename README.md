@@ -55,23 +55,23 @@ All three are also in the workspace right-click menu.
 The decisive fields are GitHub's `mergeStateStatus` and `reviewDecision`, plus whether a
 *required* check is among the failing ones; first match wins:
 
-| Condition | Emoji |
-|---|---|
-| no PR for the branch | ❔ |
-| `state == MERGED` | 🟣 |
-| `state == CLOSED` (closed unmerged), unless the branch is the repository's default | 🚪 |
-| `isDraft` | 📝 |
-| `isInMergeQueue` (the merge queue is holding it) | 🚂 |
-| `mergeStateStatus == DIRTY` (merge conflict) | ⚠️ |
-| the newest attempt of a **required** check failed (`isRequired` on a failing check run or status) **while other required checks still run** | 🟠 |
-| the same failure with every required check settled | ❌ |
-| checks still running (`statusCheckRollup.state == PENDING`, or a required check queued, in progress, or yet to report at all) | 🟡 |
-| `reviewDecision == REVIEW_REQUIRED` (waiting for a reviewer) | 👀 |
-| the merge queue let go of it, and not by merging it | 🪃 |
-| `mergeStateStatus == BLOCKED` (not mergeable for some other reason) | 🛑 |
-| `mergeStateStatus == UNSTABLE` (**only non-required checks failing**) | 🆗, or ✅ with `unstable = "pass"`, ⚠️ with `unstable = "warn"` |
-| `mergeStateStatus` in `CLEAN`, `BEHIND`, `HAS_HOOKS` | ✅ |
-| anything else (`UNKNOWN`, GitHub still computing) | keeps its last emoji, next poll |
+| Condition | Emoji | Nerd Font |
+|---|---|---|
+| no PR for the branch | ❔ | `oct-question` |
+| `state == MERGED` | 🟣 | `oct-git_merge` |
+| `state == CLOSED` (closed unmerged), unless the branch is the repository's default | 🚪 | `oct-git_pull_request_closed` |
+| `isDraft` | 📝 | `oct-git_pull_request_draft` |
+| `isInMergeQueue` (the merge queue is holding it) | 🚂 | `oct-git_merge_queue` |
+| `mergeStateStatus == DIRTY` (merge conflict) | ⚠️ | `oct-alert` |
+| the newest attempt of a **required** check failed (`isRequired` on a failing check run or status) **while other required checks still run** | 🟠 | `oct-x_circle` |
+| the same failure with every required check settled | ❌ | `oct-x_circle_fill` |
+| checks still running (`statusCheckRollup.state == PENDING`, or a required check queued, in progress, or yet to report at all) | 🟡 | `oct-sync` |
+| `reviewDecision == REVIEW_REQUIRED` (waiting for a reviewer) | 👀 | `oct-eye` |
+| the merge queue let go of it, and not by merging it | 🪃 | `oct-sign_out` |
+| `mergeStateStatus == BLOCKED` (not mergeable for some other reason) | 🛑 | `oct-no_entry` |
+| `mergeStateStatus == UNSTABLE` (**only non-required checks failing**) | 🆗, or ✅ with `unstable = "pass"`, ⚠️ with `unstable = "warn"` | `oct-check`, `oct-check_circle_fill`, `oct-alert` |
+| `mergeStateStatus` in `CLEAN`, `BEHIND`, `HAS_HOOKS` | ✅ | `oct-check_circle_fill` |
+| anything else (`UNKNOWN`, GitHub still computing) | keeps its last glyph, next poll | — |
 
 An empty answer means a row with nothing to say: no branch, a remote that is not GitHub, or a
 closed pull request on the default branch. A branch that simply has no pull request yet reads
@@ -200,12 +200,12 @@ carries the approval, a second pair of eyes signs the work off somewhere GitHub 
 and the pull request reads ✅ while the thing that actually gates it is still open. One
 optional command reports that state, and one more glyph carries it behind the blocker:
 
-| Reads | Means |
-|---|---|
-| ✅➖ | nothing to sign off |
-| ✅📭 | a sign-off is wanted and nobody has asked for one |
-| ✅🎫 | asked for, not finished |
-| ✅🏁 | finished |
+| Reads | Means | Nerd Font |
+|---|---|---|
+| ✅➖ | nothing to sign off | `oct-dash` |
+| ✅📭 | a sign-off is wanted and nobody has asked for one | `oct-shield` |
+| ✅🎫 | asked for, not finished | `oct-shield_slash` |
+| ✅🏁 | finished | `oct-shield_check` |
 
 **What the state means is the command's business, not this plugin's.** It runs once a cycle,
 as one argv with no shell, and every open, undrafted pull request arrives on its stdin:
@@ -344,11 +344,11 @@ keep the order they have, so a sort only moves what the key asks for. A workspac
 worktree is left where it is.
 
     before                        after
-       ios-sdk                       ios-sdk
-    🟡 MSP2-153                   ✅ MSP2-143
-    🟣 MSP2-155                   ❌ MSP2-132
-    ✅ MSP2-143                   🟡 MSP2-153
-    ❌ MSP2-132                   🟣 MSP2-155
+       app                           app
+    🟡 TASK-153                   ✅ TASK-143
+    🟣 TASK-155                   ❌ TASK-132
+    ✅ TASK-143                   🟡 TASK-153
+    ❌ TASK-132                   🟣 TASK-155
 
 Both sorts read `states.json` next to the log, which every cycle rewrites with the state of
 each workspace by name — the glyph on the row cannot be read back, since 🆗 borrows ⚠️ or ✅

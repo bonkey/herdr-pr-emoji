@@ -1193,8 +1193,8 @@ class Verdicts(unittest.TestCase):
         )
 
 
-IOS = "/repos/ios-sdk/.git"
-KMP = "/repos/shared-kmp/.git"
+APP_GIT = "/repos/app/.git"
+LIB_GIT = "/repos/lib/.git"
 
 
 def worktree_records(workspaces):
@@ -1229,14 +1229,14 @@ def order_after(records, key):
 class SortPlan(unittest.TestCase):
     """The moves a sort plans, without herdr and without a socket."""
 
-    def ios(self, children):
-        """The ios group: its parent, then a child per (id, label) in `children`."""
-        records = [("p", "ios-sdk", IOS, False)]
-        records += [(found, label, IOS, True) for found, label in children]
+    def group(self, children):
+        """One group: its parent, then a child per (id, label) in `children`."""
+        records = [("p", "app", APP_GIT, False)]
+        records += [(found, label, APP_GIT, True) for found, label in children]
         return worktree_records(records)
 
     def test_children_sort_by_state_in_the_documented_order(self):
-        records = self.ios([("a", "a"), ("b", "b"), ("c", "c"), ("d", "d"), ("e", "e")])
+        records = self.group([("a", "a"), ("b", "b"), ("c", "c"), ("d", "d"), ("e", "e")])
         states = {"a": "running", "b": "merged", "c": "mergeable", "d": "failing", "e": "draft"}
         self.assertEqual(
             order_after(records, daemon.by_state(states)), ["p", "c", "d", "a", "e", "b"]
@@ -1244,50 +1244,50 @@ class SortPlan(unittest.TestCase):
 
     def test_the_whole_order_is_what_the_readme_says(self):
         children = [(name, name) for name in daemon.SORT_ORDER]
-        records = self.ios(list(reversed(children)))
+        records = self.group(list(reversed(children)))
         states = {name: name for name in daemon.SORT_ORDER}
         self.assertEqual(
             order_after(records, daemon.by_state(states)), ["p"] + daemon.SORT_ORDER
         )
 
     def test_a_state_the_file_does_not_know_sorts_last(self):
-        records = self.ios([("a", "a"), ("b", "b"), ("c", "c")])
+        records = self.group([("a", "a"), ("b", "b"), ("c", "c")])
         states = {"a": "", "c": "closed"}
         self.assertEqual(order_after(records, daemon.by_state(states)), ["p", "c", "a", "b"])
 
     def test_the_name_decides_inside_a_state(self):
-        records = self.ios([("a", "MSP2-153"), ("b", "msp2-132"), ("c", "MSP2-143")])
+        records = self.group([("a", "TASK-153"), ("b", "task-132"), ("c", "TASK-143")])
         states = {"a": "mergeable", "b": "mergeable", "c": "mergeable"}
         self.assertEqual(order_after(records, daemon.by_state(states)), ["p", "b", "c", "a"])
 
     def test_the_name_sort_ignores_the_state(self):
-        records = self.ios([("a", "zeta"), ("b", "Alpha"), ("c", "mid")])
+        records = self.group([("a", "zeta"), ("b", "Alpha"), ("c", "mid")])
         self.assertEqual(order_after(records, daemon.by_name()), ["p", "b", "c", "a"])
 
     def test_the_parent_keeps_the_top_of_its_group(self):
-        records = self.ios([("a", "a")])
+        records = self.group([("a", "a")])
         states = {"p": "merged", "a": "mergeable"}
         self.assertEqual(order_after(records, daemon.by_state(states)), ["p", "a"])
 
     def test_the_same_key_keeps_the_order_the_group_has(self):
-        records = self.ios([("a", "same"), ("b", "same"), ("c", "same")])
+        records = self.group([("a", "same"), ("b", "same"), ("c", "same")])
         states = {"a": "review", "b": "review", "c": "review"}
         self.assertEqual(daemon.move_requests(records, daemon.by_state(states)), [])
 
     def test_a_group_already_in_order_moves_nothing(self):
-        records = self.ios([("a", "a"), ("b", "b")])
+        records = self.group([("a", "a"), ("b", "b")])
         states = {"a": "mergeable", "b": "merged"}
         self.assertEqual(daemon.move_requests(records, daemon.by_state(states)), [])
 
     def test_each_request_moves_one_workspace(self):
-        records = self.ios([("a", "a"), ("b", "b")])
+        records = self.group([("a", "a"), ("b", "b")])
         requests = daemon.move_requests(records, daemon.by_state({"b": "mergeable"}))
         self.assertTrue(requests)
         for request in requests:
             self.assertEqual(len(request["workspace_ids"]), 1)
 
     def test_a_group_whose_parent_is_not_open_sorts_its_children(self):
-        records = worktree_records([("a", "a", IOS, True), ("b", "b", IOS, True)])
+        records = worktree_records([("a", "a", APP_GIT, True), ("b", "b", APP_GIT, True)])
         states = {"a": "merged", "b": "review"}
         self.assertEqual(order_after(records, daemon.by_state(states)), ["b", "a"])
 
@@ -1295,9 +1295,9 @@ class SortPlan(unittest.TestCase):
         records = worktree_records(
             [
                 ("x", "x", "", False),
-                ("p", "ios-sdk", IOS, False),
-                ("a", "a", IOS, True),
-                ("b", "b", IOS, True),
+                ("p", "app", APP_GIT, False),
+                ("a", "a", APP_GIT, True),
+                ("b", "b", APP_GIT, True),
             ]
         )
         states = {"x": "mergeable", "a": "merged", "b": "review"}
@@ -1306,12 +1306,12 @@ class SortPlan(unittest.TestCase):
     def test_every_group_sorts_on_its_own(self):
         records = worktree_records(
             [
-                ("p", "ios-sdk", IOS, False),
-                ("a", "a", IOS, True),
-                ("b", "b", IOS, True),
-                ("q", "shared-kmp", KMP, False),
-                ("c", "c", KMP, True),
-                ("d", "d", KMP, True),
+                ("p", "app", APP_GIT, False),
+                ("a", "a", APP_GIT, True),
+                ("b", "b", APP_GIT, True),
+                ("q", "lib", LIB_GIT, False),
+                ("c", "c", LIB_GIT, True),
+                ("d", "d", LIB_GIT, True),
             ]
         )
         states = {"a": "closed", "b": "running", "c": "draft", "d": "conflict"}
@@ -1322,22 +1322,22 @@ class SortPlan(unittest.TestCase):
     def test_a_workspace_between_two_members_ends_up_after_the_block(self):
         records = worktree_records(
             [
-                ("p", "ios-sdk", IOS, False),
-                ("a", "a", IOS, True),
+                ("p", "app", APP_GIT, False),
+                ("a", "a", APP_GIT, True),
                 ("x", "x", "", False),
-                ("b", "b", IOS, True),
+                ("b", "b", APP_GIT, True),
             ]
         )
         states = {"a": "merged", "b": "mergeable"}
         self.assertEqual(order_after(records, daemon.by_state(states)), ["p", "b", "a", "x"])
 
     def test_states_of_a_workspace_that_is_not_open_are_ignored(self):
-        records = self.ios([("a", "a"), ("b", "b")])
+        records = self.group([("a", "a"), ("b", "b")])
         states = {"w27": "mergeable", "a": "merged", "b": "review"}
         self.assertEqual(order_after(records, daemon.by_state(states)), ["p", "b", "a"])
 
     def test_a_group_of_one_moves_nothing(self):
-        records = worktree_records([("p", "ios-sdk", IOS, False)])
+        records = worktree_records([("p", "app", APP_GIT, False)])
         self.assertEqual(daemon.move_requests(records, daemon.by_state({"p": "merged"})), [])
 
 
@@ -1480,10 +1480,10 @@ class SortEndToEnd(unittest.TestCase):
         }
         self.given_worktrees(
             [
-                ("w1", "ios-sdk", IOS, False),
-                ("w2", "MSP2-153", IOS, True),
-                ("w3", "MSP2-101", IOS, True),
-                ("w4", "MSP2-143", IOS, True),
+                ("w1", "app", APP_GIT, False),
+                ("w2", "TASK-153", APP_GIT, True),
+                ("w3", "TASK-101", APP_GIT, True),
+                ("w4", "TASK-143", APP_GIT, True),
             ]
         )
         # By state: w4 w2 w3. By name: w3 w4 w2. The two orders share nothing.
@@ -1562,7 +1562,7 @@ class SortEndToEnd(unittest.TestCase):
     def test_a_cycle_writes_the_states_file_the_sort_reads(self):
         # A cycle over workspaces without a checkout has nothing to ask GitHub,
         # so it runs without `gh` being called and records an empty name each.
-        self.given_worktrees([("w1", "ios-sdk", "", False)])
+        self.given_worktrees([("w1", "app", "", False)])
         os.remove(os.path.join(self.state, "states.json"))
         self.env["PATH"] = os.path.join(self.root, "bin")
         os.makedirs(self.env["PATH"])
