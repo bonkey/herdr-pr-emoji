@@ -3,7 +3,9 @@
 # ask GitHub in one request for the newest pull request of every branch (plus
 # one for the required checks and open conversations of the PRs that fail or
 # are blocked), and publish one emoji as the `pr_emoji` token on the workspace
-# (Space rows) and on each of its panes (Agent rows).
+# (Space rows) and on each of its panes (Agent rows). Where a `signoffCommand`
+# is configured, one more glyph rides behind it with the state of a review that
+# happens outside GitHub.
 #
 #   python3 daemon.py                      loop; started by herdr as a [[startup]] hook
 #   python3 daemon.py --once               one cycle, then exit (manual refresh, development)
@@ -63,6 +65,7 @@ DEFAULT_UNSTABLE = "ok"
 HERDR_TIMEOUT = 10
 GIT_TIMEOUT = 5
 GH_TIMEOUT = 30
+DEFAULT_SIGNOFF_TIMEOUT = 20
 
 # A required check whose newest attempt ended this way is real breakage.
 # ACTION_REQUIRED is missing, not broken: `mergeStateStatus` reports it as BLOCKED.
@@ -88,6 +91,13 @@ EMOJI = {
     "unstable": "🆗",
     "mergeable": "✅",
     "conversation": "💬",
+    # The sign-off a `signoffCommand` reports, behind the blocker and its 💬.
+    # These four name no blocker and take no sort rank: they say what a review
+    # outside GitHub asks for, which the pull request itself cannot report.
+    "signoff_not_required": "➖",
+    "signoff_missing": "📭",
+    "signoff_open": "🎫",
+    "signoff_done": "🏁",
 }
 # Octicons, GitHub's own icon language, as a Nerd Font carries them. One of
 # them is drawn for the merge queue. Codepoints from the Nerd Fonts glyph
@@ -109,13 +119,26 @@ NERD = {
     "unstable": "\uF42E",  # oct-check
     "mergeable": "\uF4A4",  # oct-check_circle_fill
     "conversation": "\uF442",  # oct-comment_discussion
+    # One shield family for the three sign-off states that ask for something,
+    # so they tell each other apart by shape: the cell takes the blocker's
+    # colour, and a glyph behind it is drawn in that same colour.
+    "signoff_not_required": "\uF48B",  # oct-dash
+    "signoff_missing": "\uF512",  # oct-shield_slash
+    "signoff_open": "\uF49C",  # oct-shield
+    "signoff_done": "\uF510",  # oct-shield_check
 }
 ICON_SETS = {"emoji": EMOJI, "nerd": NERD}
 DEFAULT_ICON_SET = "nerd"
-# The name of every state, as a glyph table: `blocker_for` reads its verdict
-# out of whatever table it is handed, so this one makes it answer with the
-# name rather than the glyph.
-STATE_NAMES = {name: name for name in EMOJI}
+SIGNOFF_PREFIX = "signoff_"
+# What a `signoffCommand` may answer: the glyph table is the vocabulary, so a
+# state nothing can draw is a state the hook cannot report.
+SIGNOFF_STATES = frozenset(
+    name[len(SIGNOFF_PREFIX) :] for name in EMOJI if name.startswith(SIGNOFF_PREFIX)
+)
+# The name of every blocker state, as a glyph table: `blocker_for` reads its
+# verdict out of whatever table it is handed, so this one makes it answer with
+# the name rather than the glyph. A sign-off is not a blocker and is left out.
+STATE_NAMES = {name: name for name in EMOJI if not name.startswith(SIGNOFF_PREFIX)}
 
 # The order `--sort` puts a worktree group in: what a hand of yours is needed
 # for first, then what waits on somebody else, then what has no pull request
@@ -165,15 +188,25 @@ def log(message):
     sys.stderr.flush()
 
 
-def run(argv, timeout):
-    """(returncode, stdout, stderr). A timed-out command returns 124, like coreutils."""
+def run(argv, timeout, text=None):
+    """(returncode, stdout, stderr). A timed-out command returns 124, like coreutils.
+
+    `text` is written to the command's stdin, which otherwise reads nothing.
+    `subprocess.run` refuses `stdin` and `input` together, so only one of them
+    is ever passed.
+    """
+    feed = (
+        {"input": text.encode("utf-8")}
+        if text is not None
+        else {"stdin": subprocess.DEVNULL}
+    )
     try:
         done = subprocess.run(
             argv,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
-            stdin=subprocess.DEVNULL,
             timeout=timeout,
+            **feed
         )
     except subprocess.TimeoutExpired:
         return 124, "", "timed out after %ss" % timeout
@@ -212,6 +245,32 @@ def read_config(path):
     if found and found.group(1) in ICON_SETS:
         icons = found.group(1)
     return interval, icon_set(icons, unstable)
+
+
+def read_signoff(path):
+    """(command, timeout) for the sign-off hook; an empty command means none.
+
+    Read apart from the rest of the configuration because the hook is optional
+    in a way the other settings are not: without a command nothing is run, no
+    row grows a third glyph, and the cycle costs exactly what it did before.
+    """
+    command, timeout = "", DEFAULT_SIGNOFF_TIMEOUT
+    try:
+        with open(path, "r", encoding="utf-8") as handle:
+            text = handle.read()
+    except OSError:
+        return command, timeout
+    found = re.search(
+        r'^[ \t]*signoffCommand[ \t]*=[ \t]*"([^"]*)"', text, re.MULTILINE
+    )
+    if found and found.group(1).strip():
+        command = os.path.expanduser(found.group(1).strip())
+    found = re.search(
+        r"^[ \t]*signoffTimeoutSeconds[ \t]*=[ \t]*(\d+)", text, re.MULTILINE
+    )
+    if found and int(found.group(1)) > 0:
+        timeout = int(found.group(1))
+    return command, timeout
 
 
 # ---------------------------------------------------------------- pure decisions
@@ -393,11 +452,73 @@ def verdict_for(pr):
 
 
 def emoji_for(pr, icons=DEFAULT_ICONS):
-    """The blocker's glyph, and 💬 after it when conversations are open too."""
+    """The blocker's glyph, 💬 after it when conversations are open too, and
+    the sign-off glyph behind both.
+
+    A row with nothing to say keeps its emptiness: a sign-off glyph on its own
+    would report a review of a pull request whose own state went unsaid. A
+    draft swallows the sign-off the way it swallows 💬 — the hook is not even
+    asked about a draft — and a sign-off nobody answered for draws nothing.
+    """
     state, conversation = verdict_for(pr)
     if not state:
         return ""
-    return icons[state] + (icons["conversation"] if conversation else "")
+    glyph = icons[state] + (icons["conversation"] if conversation else "")
+    if pr.get("isDraft"):
+        return glyph
+    return glyph + (icons.get(SIGNOFF_PREFIX + (pr.get("signoff") or "")) or "")
+
+
+def signoff_input(prs):
+    """The hook's stdin: `slug<TAB>branch<TAB>number<TAB>review<TAB>merge state`,
+    one line per open, undrafted pull request.
+
+    Only the rows whose answer a glyph could show are sent. A merged, closed or
+    drafted pull request, and a branch with none at all, are left out, so the
+    hook is never asked a question the row would swallow.
+
+    The columns are append-only: a hook that reads the first three goes on
+    working whatever is added behind them. The verdict is not among them — it
+    now carries the sign-off glyph itself, so passing it in would ask the hook
+    to answer with what it was given.
+    """
+    lines = []
+    for pr in prs:
+        if pr.get("number") is None or pr.get("state") != "OPEN" or pr.get("isDraft"):
+            continue
+        lines.append(
+            "%s\t%s\t%d\t%s\t%s\n"
+            % (
+                pr["slug"],
+                pr["branch"],
+                pr["number"],
+                pr.get("reviewDecision") or "",
+                pr.get("mergeStateStatus") or "",
+            )
+        )
+    return "".join(lines)
+
+
+def parse_signoff(text):
+    """({(slug, branch): state}, [unknown state, ...]) from the hook's stdout.
+
+    One `slug<TAB>branch<TAB>state` line per answer. A line of another shape is
+    dropped, and so is a state no glyph answers for — the row then keeps the
+    emoji it has until its TTL runs out, which is what an unanswered row gets
+    everywhere else. The unknown names are returned rather than logged, so the
+    caller does the talking and this stays a decision.
+    """
+    states, unknown = {}, []
+    for line in text.splitlines():
+        parts = [part.strip() for part in line.split("\t")]
+        if len(parts) != 3 or not parts[0] or not parts[1]:
+            continue
+        slug, branch, state = parts
+        if state not in SIGNOFF_STATES:
+            unknown.append(state)
+            continue
+        states[(slug, branch)] = state
+    return states, unknown
 
 
 def describe_errors(errors):
@@ -576,8 +697,9 @@ def parse_required(data, targets):
     return marks
 
 
-def decide(prs, marks, icons=DEFAULT_ICONS):
-    """{(slug, branch): emoji} from the pull requests and their required-check marks.
+def decide(prs, marks, icons=DEFAULT_ICONS, signoffs=None):
+    """{(slug, branch): emoji} from the pull requests, their required-check
+    marks and the sign-off states the hook answered with.
 
     A pull request the required-check query did not answer for keeps the
     defaults, so it loses only its ❌, 🟠, 🟡 and 💬 verdicts and stays on 🛑.
@@ -598,6 +720,7 @@ def decide(prs, marks, icons=DEFAULT_ICONS):
         )
         pr["required_failing"], pr["required_running"] = failing, running
         pr["conversation_block"] = conversations
+        pr["signoff"] = (signoffs or {}).get((pr["slug"], pr["branch"]), "")
         emoji = emoji_for(pr, icons)
         if not emoji and pr.get("number") is not None and pr.get("state") == "OPEN":
             continue
@@ -678,9 +801,38 @@ def gh_graphql(query):
     return body.get("data"), body.get("errors") or []
 
 
-def resolve(pairs, icons=DEFAULT_ICONS):
+def run_signoff(command, timeout, text):
+    """{(slug, branch): state} from the sign-off hook; empty whenever it cannot
+    answer.
+
+    The command runs as one argv with no shell, so nothing in the configured
+    string is interpreted, and every row goes to its stdin at once: one
+    subprocess a cycle, however many worktrees are open. A hook that times out,
+    exits non-zero or cannot be run costs its own glyph and nothing else — the
+    pull request state is already decided without it.
+    """
+    rc, out, err = run([command], timeout, text)
+    if rc != 0:
+        log(
+            "signoffCommand exited %d: %s"
+            % (rc, err.strip().splitlines()[-1] if err.strip() else "no output")
+        )
+        return {}
+    states, unknown = parse_signoff(out)
+    if unknown:
+        log(
+            "signoffCommand answered with %s, which no glyph draws"
+            % ", ".join(sorted(set(unknown)))
+        )
+    return states
+
+
+def resolve(pairs, icons=DEFAULT_ICONS, signoff=None):
     """({(slug, branch): emoji}, {(slug, branch): state}) for the branches
     GitHub answered for.
+
+    `signoff` is the (command, timeout) pair `read_signoff` returns. Without a
+    command no hook runs at all.
 
     Every failure is contained: an unanswered branch is simply absent, and an
     unanswered required-check query only loses the ❌ and 🟡 verdicts of that
@@ -708,7 +860,13 @@ def resolve(pairs, icons=DEFAULT_ICONS):
                 "no required checks for %s, ❌ and 🟡 fall back to 🛑"
                 % ", ".join("%s#%d" % target for target in missing)
             )
-    verdicts = decide(prs, marks, icons)
+    signoffs = {}
+    command, timeout = signoff or ("", DEFAULT_SIGNOFF_TIMEOUT)
+    if command:
+        text = signoff_input(prs)
+        if text:
+            signoffs = run_signoff(command, timeout, text)
+    verdicts = decide(prs, marks, icons, signoffs)
     return verdicts, states_of(prs, verdicts)
 
 
@@ -781,7 +939,7 @@ def panes_of(panes, workspace_id):
     ]
 
 
-def cycle(interval, icons):
+def cycle(interval, icons, signoff=None):
     """One cycle. Returns False only when herdr itself is unreachable."""
     workspaces = herdr_json("workspace", "list")
     panes = herdr_json("pane", "list")
@@ -798,7 +956,7 @@ def cycle(interval, icons):
         rows.append((workspace_id, slug, branch))
 
     pairs = sorted({(slug, branch) for _, slug, branch in rows if slug and branch})
-    verdicts, states = resolve(pairs, icons) if pairs else ({}, {})
+    verdicts, states = resolve(pairs, icons, signoff) if pairs else ({}, {})
     save_states(plan_states(rows, states, load_states()))
 
     ttl_ms = interval * 3 * 1000
@@ -817,14 +975,14 @@ def cycle(interval, icons):
     return True
 
 
-def guarded_cycle(interval, icons):
+def guarded_cycle(interval, icons, signoff=None):
     """One cycle, with an unexpected answer contained.
 
     A payload no parser expected must cost one cycle, not the daemon: without a
     daemon nothing refreshes the tokens and every emoji disappears.
     """
     try:
-        return cycle(interval, icons)
+        return cycle(interval, icons, signoff)
     except Exception as exc:
         log("cycle failed: %r" % exc)
         return True
@@ -847,8 +1005,8 @@ def read_pairs(stream, slug=None):
     return sorted(pairs)
 
 
-def print_verdicts(pairs, icons, with_slug):
-    verdicts, _ = resolve(pairs, icons)
+def print_verdicts(pairs, icons, with_slug, signoff=None):
+    verdicts, _ = resolve(pairs, icons, signoff)
     for slug, branch in pairs:
         emoji = verdicts.get((slug, branch), "")
         if with_slug:
@@ -1136,6 +1294,7 @@ def main(argv):
     except OSError:
         pass
     interval, icons = read_config(CONFIG)
+    signoff = read_signoff(CONFIG)
 
     command = argv[0] if argv else ""
     if command in ("--sort", "--sort-name"):
@@ -1151,13 +1310,15 @@ def main(argv):
         if len(argv) < 2 or "/" not in argv[1]:
             log("usage: daemon.py --query owner/name")
             return 2
-        print_verdicts(read_pairs(sys.stdin, argv[1]), icons, with_slug=False)
+        print_verdicts(
+            read_pairs(sys.stdin, argv[1]), icons, with_slug=False, signoff=signoff
+        )
         return 0
     if command == "--resolve":
-        print_verdicts(read_pairs(sys.stdin), icons, with_slug=True)
+        print_verdicts(read_pairs(sys.stdin), icons, with_slug=True, signoff=signoff)
         return 0
     if command == "--once":
-        if not guarded_cycle(interval, icons):
+        if not guarded_cycle(interval, icons, signoff):
             log("herdr unreachable")
         return 0
 
@@ -1166,14 +1327,14 @@ def main(argv):
     for sig in (signal.SIGTERM, signal.SIGINT):
         signal.signal(sig, lambda *_: sys.exit(0))
     log(
-        "started pid %d, interval %ds, unstable=%s"
-        % (os.getpid(), interval, icons["unstable"])
+        "started pid %d, interval %ds, unstable=%s, signoff=%s"
+        % (os.getpid(), interval, icons["unstable"], signoff[0] or "none")
     )
 
     failures = 0
     try:
         while True:
-            if guarded_cycle(interval, icons):
+            if guarded_cycle(interval, icons, signoff):
                 failures = 0
             else:
                 failures += 1

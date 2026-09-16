@@ -1,0 +1,19 @@
+#!/bin/sh
+# A sign-off hook that answers one fixed state for every pull request, to prove
+# the wiring before a real one is written.
+#
+#   signoffCommand = "/path/to/examples/pr-signoff-static"
+#
+# Every open, undrafted pull request arrives on stdin as
+#   owner/name<TAB>branch<TAB>number<TAB>reviewDecision<TAB>mergeStateStatus
+# and the answer is
+#   owner/name<TAB>branch<TAB>not_required|missing|open|done
+#
+# Set STATE to see each glyph in the sidebar in turn.
+
+STATE="${STATE:-missing}"
+
+while IFS='	' read -r slug branch number review merge; do
+    [ -n "$slug" ] || continue
+    printf '%s\t%s\t%s\n' "$slug" "$branch" "$STATE"
+done

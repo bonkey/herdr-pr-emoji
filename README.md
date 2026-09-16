@@ -144,8 +144,8 @@ A removal that records no reason at all is no evidence, and says nothing.
 
 ## The 💬 modifier
 
-💬 is the one emoji that joins another instead of replacing it, so the token is never wider
-than two:
+💬 is the one emoji that joins another instead of replacing it, so the token is two glyphs
+wide, and three only where a [sign-off](#the-sign-off-glyph) rides behind it:
 
 | Reads | Means |
 |---|---|
@@ -193,12 +193,62 @@ GitHub marked it, so a check whose `isRequired` says false while branch protecti
 the same name cannot pin the emoji to 🟡. Where the token cannot read the branch protection
 rule, the verdict rests on the checks that did report.
 
+## The sign-off glyph
+
+Some reviews do not happen on the pull request. A ticket asks for one, a change record
+carries the approval, a second pair of eyes signs the work off somewhere GitHub cannot see —
+and the pull request reads ✅ while the thing that actually gates it is still open. One
+optional command reports that state, and one more glyph carries it behind the blocker:
+
+| Reads | Means |
+|---|---|
+| ✅➖ | nothing to sign off |
+| ✅📭 | a sign-off is wanted and nobody has asked for one |
+| ✅🎫 | asked for, not finished |
+| ✅🏁 | finished |
+
+**What the state means is the command's business, not this plugin's.** It runs once a cycle,
+as one argv with no shell, and every open, undrafted pull request arrives on its stdin:
+
+    owner/name<TAB>branch<TAB>number<TAB>reviewDecision<TAB>mergeStateStatus
+
+It answers the rows it knows about, one per line:
+
+    owner/name<TAB>branch<TAB>not_required|missing|open|done
+
+The columns are append-only, so a command that reads the first three goes on working
+whatever is added behind them. The verdict is not among them: it carries the sign-off glyph
+itself, so passing it in would ask the command to answer with what it was given. Only the
+rows whose answer a glyph could show are sent — a merged, closed or drafted pull request, and
+a branch with none at all, are left out, because a draft swallows the sign-off the way it
+swallows 💬.
+
+Every kind of silence keeps the row where it is. A row the command leaves out, a state no
+glyph draws, a line of another shape, a non-zero exit, a timeout, a command that cannot be
+run at all: each costs the third glyph and nothing else. The pull request state is already
+decided without it, and the token's TTL expires whatever nobody refreshes. Without a
+`signoffCommand` the subprocess never runs and no row grows a third glyph, so the cycle costs
+exactly what it did before.
+
+The command holds whatever credentials it needs. The plugin passes none, reads none and
+stores none: it has a path, a timeout and five columns of GitHub's own answer. `examples/`
+carries two of them — `pr-signoff-static`, which answers one fixed state to prove the wiring,
+and `pr-signoff-jira`, which reads the state of a review ticket with every specific of your
+team in an environment variable.
+
+One caveat about colour: a sidebar cell takes one colour, the first `contains` rule that
+matches, which is the blocker. A glyph behind it is drawn in that same colour, so the three
+Octicons that ask for something are one shield family and tell each other apart by shape
+rather than by hue, with a dash for the state that asks for nothing. The emoji set carries
+its own colour and loses nothing.
+
 ## Two icon sets
 
 The rows are drawn with Octicons from a Nerd Font by default — GitHub's own icon language,
 and one of them is drawn for the merge queue. They are one cell wide where an emoji is two,
-so a row is half the width and a token that carries 💬 as well is two cells rather than
-four. Set `icons = "emoji"` for the emoji this README names, which need no particular font.
+so a row is half the width: a token that carries 💬 as well is two cells rather than four,
+and one that carries a sign-off behind it three rather than six. Set `icons = "emoji"` for
+the emoji this README names, which need no particular font.
 
 | State | Nerd Font | Emoji |
 |---|---|---|
@@ -217,6 +267,12 @@ four. Set `icons = "emoji"` for the emoji this README names, which need no parti
 | only optional checks failing | `oct-check` | 🆗 |
 | mergeable | `oct-check_circle_fill` | ✅ |
 | conversation open | `oct-comment_discussion` | 💬 |
+| sign-off: none wanted | `oct-dash` | ➖ |
+| sign-off: missing | `oct-shield_slash` | 📭 |
+| sign-off: open | `oct-shield` | 🎫 |
+| sign-off: done | `oct-shield_check` | 🏁 |
+
+The last four are drawn only where a [`signoffCommand`](#the-sign-off-glyph) reports them.
 
 The prose below and the table above name the emoji throughout, because a Nerd Font glyph is
 a private-use codepoint that cannot be read on a page. Both sets say the same things.
@@ -225,8 +281,10 @@ The Octicons are monochrome, and the plugin never styles what it publishes: `rep
 takes a plain `--token NAME=VALUE`, and herdr strips control bytes from the value, so an ANSI
 sequence would arrive as the literal text `[32m`. **The colour is herdr's to apply**, and it
 does: a sidebar cell takes up to sixteen `rules`, matched against the token's value in order,
-and the first match wins. That is one rule per state, in the order of the table above, with
-one to spare.
+and the first match wins. That is one rule per state the pull request itself reports, in the
+order of the table above, with one to spare. The four sign-off states need none: every value
+that carries one starts with a blocker glyph, so a rule behind the fifteen below could never
+be the first to match.
 
 ```toml
 [ui.sidebar.spaces]
@@ -252,8 +310,9 @@ rows = [
 ]
 ```
 
-`contains` rather than `equals`, because a verdict that carries 💬 is two glyphs: the blocker
-on the left still colours the cell, and a 💬 standing alone falls through to the last rule.
+`contains` rather than `equals`, because a verdict that carries 💬 or a sign-off is two
+glyphs or three: the blocker on the left still colours the cell, and a 💬 standing alone
+falls through to the last rule.
 The `\uXXXX` escapes are the glyphs themselves; herdr's TOML reads them, and they keep the
 block legible where a private-use character would be an empty box.
 The rules are ordered the way `blocker_for` decides, so the emoji and its colour always agree
@@ -314,10 +373,13 @@ One long-lived loop, started with the server. Each cycle:
    `requiredStatusCheckContexts` and `requiresConversationResolution`, and the pull request
    for its review threads, to tell 🟠 from ❌ from 🟡 from 💬 from 🛑. Two calls per cycle,
    however many repositories are open.
-4. `report-metadata` on the workspace and each of its panes, with a TTL of three
+4. Where a [`signoffCommand`](#the-sign-off-glyph) is configured, **one subprocess** with
+   every open, undrafted pull request on its stdin, however many repositories are open.
+   Nothing runs without one.
+5. `report-metadata` on the workspace and each of its panes, with a TTL of three
    intervals: if the daemon dies, the emoji disappears instead of going stale.
 
-Every subprocess (`herdr`, `git`, `gh`) has a timeout.
+Every subprocess (`herdr`, `git`, `gh`, the sign-off command) has a timeout.
 
 Failures are contained per branch. `gh api graphql` exits 1 whenever the response carries an
 `errors` array, even when it also carries usable data, so the exit code alone decides
@@ -340,6 +402,8 @@ polls in parallel with the one the server starts.
     refreshIntervalSeconds = 120   # floor: 60
     unstable = "ok"                # UNSTABLE: "ok" 🆗, "pass" ✅, "warn" ⚠️
     icons = "nerd"                 # "nerd" Octicons (default), or "emoji"
+    signoffCommand = ""            # the sign-off hook; none by default
+    signoffTimeoutSeconds = 20     # what the hook gets before it is given up on
 
 Logs, the pid file and the states file the sorts read: `~/.local/state/herdr/plugins/bonkey.pr-emoji/`, so the log is `~/.local/state/herdr/plugins/bonkey.pr-emoji/daemon.log`.
 
@@ -359,17 +423,26 @@ development launch the loop by hand and check what it publishes with `herdr api 
     python3 daemon.py --sort                                # by state, then name; needs HERDR_SOCKET_PATH
     python3 daemon.py --sort-name                           # by name
 
-The emoji decisions, the two GraphQL queries, the publishing plan and the moves a sort plans
-are pure functions with tests over GraphQL responses recorded from real pull requests, under
-`fixtures/`; the two sorts also run end to end against a stub herdr and a stub API socket:
+`--query` and `--resolve` run the configured sign-off command too, so a new one can be tried
+without herdr. The command inherits the daemon's environment, which is how the static example
+is pointed at one state after another once `signoffCommand` names it:
+
+    STATE=open python3 daemon.py --once     # examples/pr-signoff-static answers "open"
+
+The emoji decisions, the two GraphQL queries, the publishing plan, what the sign-off command
+is asked and what it may answer, and the moves a sort plans are pure functions with tests
+over GraphQL responses recorded from real pull requests, under `fixtures/`; the sign-off
+command runs against stub hooks on disk, and the two sorts end to end against a stub herdr
+and a stub API socket:
 
     python3 -m unittest
 
 ## Non-goals
 
-Titles, review counts, several rows per space, opening PRs. One emoji per row, and 💬 after
-it when conversations are open too — no third slot. A queued pull request's position in the
-queue and its estimated time to merge are the queue's business, not a row's.
+Titles, review counts, several rows per space, opening PRs. A queued pull request's position
+in the queue and its estimated time to merge are the queue's business, not a row's. Knowing
+what a sign-off means: the plugin draws the four states a command reports and asks no
+service of its own about any of them.
 
 ## License
 

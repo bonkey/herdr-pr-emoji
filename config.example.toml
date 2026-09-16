@@ -12,3 +12,22 @@ unstable = "ok"
 #   "emoji" -> the emoji this README names, two cells each
 # A Nerd Font has to be the terminal's font for "nerd" to render.
 icons = "nerd"
+
+# A command that reports a review happening outside GitHub, as one more glyph
+# behind the pull request state. Without it no row grows one and nothing runs.
+#
+# It is run once a cycle with no shell. Every open, undrafted pull request
+# arrives on its stdin as
+#   owner/name<TAB>branch<TAB>number<TAB>reviewDecision<TAB>mergeStateStatus
+# and it answers the ones it knows about, one per line, as
+#   owner/name<TAB>branch<TAB>not_required|missing|open|done
+#
+#   not_required -> ➖  nothing to sign off
+#   missing      -> 📭  a sign-off is wanted and nobody asked for one
+#   open         -> 🎫  asked for, not finished
+#   done         -> 🏁  finished
+#
+# A row it leaves out keeps the glyph it has. A command that fails or times out
+# costs its own glyph and nothing else. See examples/ for two of them.
+# signoffCommand = "~/bin/pr-signoff"
+# signoffTimeoutSeconds = 20

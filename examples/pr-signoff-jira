@@ -1,0 +1,186 @@
+#!/usr/bin/env python3
+# A sign-off hook that reads the state of a review ticket in Jira.
+#
+#   signoffCommand = "/path/to/examples/pr-signoff-jira"
+#
+# Every open, undrafted pull request arrives on stdin as
+#   owner/name<TAB>branch<TAB>number<TAB>reviewDecision<TAB>mergeStateStatus
+# and the answer is
+#   owner/name<TAB>branch<TAB>not_required|missing|open|done
+#
+# The lookup runs ticket to pull request, not the other way round: a ticket
+# that names a pull request in its description is the only link there is, so one
+# search fetches every candidate ticket and the pull requests are matched
+# against what those tickets name. One request a cycle, whatever the sidebar
+# holds, and no fuzzy search on a bare pull request number.
+#
+# Everything specific to your team is an environment variable. Nothing about it
+# belongs in this file.
+#
+#   SIGNOFF_JIRA_URL        https://your-team.atlassian.net
+#   SIGNOFF_JIRA_JQL        the search for candidate tickets, for example
+#                           project = ABC AND summary ~ "\"[PR Review]\""
+#                           AND updated >= -30d
+#   SIGNOFF_JIRA_EMAIL      the account the token belongs to
+#   SIGNOFF_JIRA_TOKEN      an API token, or
+#   SIGNOFF_JIRA_TOKEN_CMD  a command that prints one, to keep it out of the
+#                           environment: "op read op://Private/jira/token"
+#   SIGNOFF_JIRA_PAGES      how many pages of 100 tickets to read. Default: 3
+#
+# Every failure exits non-zero with a line on stderr, which the daemon logs.
+# Each row then keeps the glyph it has until its TTL runs out.
+
+import base64
+import json
+import os
+import re
+import subprocess
+import sys
+import urllib.error
+import urllib.parse
+import urllib.request
+
+PULL_URL = re.compile(r"github\.com[:/]+([A-Za-z0-9._-]+/[A-Za-z0-9._-]+)/pull/(\d+)")
+PAGE = 100
+TIMEOUT = 15
+
+
+def fail(message):
+    sys.stderr.write("pr-signoff-jira: %s\n" % message)
+    raise SystemExit(1)
+
+
+def setting(name, required=True):
+    value = (os.environ.get(name) or "").strip()
+    if required and not value:
+        fail("%s is not set" % name)
+    return value
+
+
+def token():
+    """The API token, from the environment or from a command that prints it."""
+    command = setting("SIGNOFF_JIRA_TOKEN_CMD", required=False)
+    if not command:
+        return setting("SIGNOFF_JIRA_TOKEN")
+    try:
+        done = subprocess.run(
+            command,
+            shell=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            timeout=TIMEOUT,
+        )
+    except (OSError, subprocess.SubprocessError) as error:
+        fail("SIGNOFF_JIRA_TOKEN_CMD: %s" % error)
+    if done.returncode != 0:
+        fail(
+            "SIGNOFF_JIRA_TOKEN_CMD exited %d: %s"
+            % (done.returncode, done.stderr.decode("utf-8", "replace").strip())
+        )
+    value = done.stdout.decode("utf-8", "replace").strip()
+    if not value:
+        fail("SIGNOFF_JIRA_TOKEN_CMD printed nothing")
+    return value
+
+
+def search(base, jql, auth, pages):
+    """Every candidate ticket, as (description, status category) pairs.
+
+    The v2 API is asked on purpose: it answers with the description as text,
+    where v3 answers with a document tree a regular expression cannot read.
+    """
+    found, at = [], 0
+    for _ in range(pages):
+        query = urllib.parse.urlencode(
+            {
+                "jql": jql,
+                "fields": "status,description",
+                "maxResults": PAGE,
+                "startAt": at,
+            }
+        )
+        request = urllib.request.Request(
+            "%s/rest/api/2/search?%s" % (base.rstrip("/"), query),
+            headers={"Authorization": "Basic " + auth, "Accept": "application/json"},
+        )
+        try:
+            with urllib.request.urlopen(request, timeout=TIMEOUT) as answer:
+                body = json.load(answer)
+        except (urllib.error.URLError, OSError, ValueError) as error:
+            fail("%s: %s" % (base, error))
+        issues = body.get("issues") or []
+        for issue in issues:
+            fields = issue.get("fields") or {}
+            category = ((fields.get("status") or {}).get("statusCategory") or {}).get(
+                "key"
+            )
+            found.append((fields.get("description") or "", category or ""))
+        at += len(issues)
+        if not issues or at >= (body.get("total") or 0):
+            break
+    return found
+
+
+def tickets_by_pull(issues):
+    """{(slug, number): state} for every pull request the tickets name.
+
+    `statusCategory` rather than a status name, so no list of your team's
+    workflow states has to live here: Jira puts every finished status in the
+    `done` category whatever it is called. A pull request named by more than one
+    ticket counts as signed off once any of them is finished.
+    """
+    states = {}
+    for description, category in issues:
+        state = "done" if category == "done" else "open"
+        for slug, number in PULL_URL.findall(description):
+            key = (slug.lower(), int(number))
+            if states.get(key) != "done":
+                states[key] = state
+    return states
+
+
+def without_a_ticket(review, merge):
+    """What a pull request no ticket names reads as.
+
+    This is the part to adapt. Here a pull request that has been approved needs
+    no ticket of its own, and one that has not is missing the ticket that would
+    ask for the review.
+    """
+    return "not_required" if review == "APPROVED" else "missing"
+
+
+def main():
+    rows = []
+    for line in sys.stdin:
+        parts = line.rstrip("\n").split("\t")
+        if len(parts) < 3 or not parts[0] or not parts[1]:
+            continue
+        try:
+            number = int(parts[2])
+        except ValueError:
+            continue
+        rows.append(
+            (parts[0], parts[1], number, parts[3] if len(parts) > 3 else "",
+             parts[4] if len(parts) > 4 else "")
+        )
+    if not rows:
+        return 0
+
+    base = setting("SIGNOFF_JIRA_URL")
+    jql = setting("SIGNOFF_JIRA_JQL")
+    email = setting("SIGNOFF_JIRA_EMAIL")
+    try:
+        pages = max(1, int(setting("SIGNOFF_JIRA_PAGES", required=False) or 3))
+    except ValueError:
+        pages = 3
+    auth = base64.b64encode(("%s:%s" % (email, token())).encode("utf-8")).decode("ascii")
+
+    states = tickets_by_pull(search(base, jql, auth, pages))
+    for slug, branch, number, review, merge in rows:
+        state = states.get((slug.lower(), number)) or without_a_ticket(review, merge)
+        sys.stdout.write("%s\t%s\t%s\n" % (slug, branch, state))
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

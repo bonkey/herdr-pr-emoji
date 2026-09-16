@@ -77,8 +77,8 @@ def emoji_for(pr, icons=EMOJI):
     return daemon.emoji_for(pr, icons)
 
 
-def decide(prs, marks, icons=EMOJI):
-    return daemon.decide(prs, marks, icons)
+def decide(prs, marks, icons=EMOJI, signoffs=None):
+    return daemon.decide(prs, marks, icons, signoffs)
 
 
 def fixture(name):
@@ -891,6 +891,184 @@ class Lookup(unittest.TestCase):
         self.assertEqual(decide(prs, marks)[(APP, "feature/c-blocked")], "🛑")
 
 
+class Signoff(unittest.TestCase):
+    """The third glyph: what the hook is asked, what it may answer, and what a
+    hook that cannot answer costs."""
+
+    def open_pr(self, branch, **fields):
+        pr = {
+            "slug": APP,
+            "branch": branch,
+            "number": 1,
+            "state": "OPEN",
+            "mergeStateStatus": "CLEAN",
+            "reviewDecision": "APPROVED",
+        }
+        pr.update(fields)
+        return pr
+
+    def hook(self, body):
+        """An executable stub on disk, the way herdr runs a configured one."""
+        directory = tempfile.mkdtemp(prefix="pr-emoji-signoff-")
+        self.addCleanup(lambda: __import__("shutil").rmtree(directory, True))
+        path = os.path.join(directory, "hook")
+        with open(path, "w", encoding="utf-8") as handle:
+            handle.write(body)
+        os.chmod(path, os.stat(path).st_mode | stat.S_IXUSR)
+        return path
+
+    # ------------------------------------------------------------ what it is asked
+
+    def test_only_an_open_undrafted_pull_request_is_asked_about(self):
+        prs = [
+            self.open_pr("feature/open"),
+            self.open_pr("feature/draft", isDraft=True),
+            self.open_pr("feature/merged", state="MERGED"),
+            self.open_pr("feature/closed", state="CLOSED"),
+            {"slug": APP, "branch": "main", "number": None},
+        ]
+        self.assertEqual(
+            daemon.signoff_input(prs),
+            "%s\tfeature/open\t1\tAPPROVED\tCLEAN\n" % APP,
+        )
+
+    def test_nothing_to_ask_about_is_an_empty_input(self):
+        self.assertEqual(daemon.signoff_input([{"number": None}]), "")
+
+    def test_a_missing_field_is_an_empty_column(self):
+        prs = [self.open_pr("feature/x", reviewDecision="", mergeStateStatus=None)]
+        self.assertEqual(daemon.signoff_input(prs), "%s\tfeature/x\t1\t\t\n" % APP)
+
+    # ------------------------------------------------------- what it may answer
+
+    def test_every_answer_the_glyphs_draw(self):
+        lines = "".join(
+            "%s\tfeature/%s\t%s\n" % (APP, state, state) for state in daemon.SIGNOFF_STATES
+        )
+        states, unknown = daemon.parse_signoff(lines)
+        self.assertEqual(unknown, [])
+        self.assertEqual(len(states), len(daemon.SIGNOFF_STATES))
+        for state in daemon.SIGNOFF_STATES:
+            self.assertEqual(states[(APP, "feature/" + state)], state)
+
+    def test_surrounding_space_is_not_part_of_an_answer(self):
+        states, _ = daemon.parse_signoff(" %s \t feature/x \t done \n" % APP)
+        self.assertEqual(states, {(APP, "feature/x"): "done"})
+
+    def test_a_state_no_glyph_draws_is_reported_and_dropped(self):
+        states, unknown = daemon.parse_signoff(
+            "%s\tfeature/x\tapproved\n%s\tfeature/y\tdone\n" % (APP, APP)
+        )
+        self.assertEqual(states, {(APP, "feature/y"): "done"})
+        self.assertEqual(unknown, ["approved"])
+
+    def test_a_line_of_another_shape_is_dropped(self):
+        states, unknown = daemon.parse_signoff(
+            "\n%s\tfeature/x\n%s\tfeature/y\tdone\textra\n\tfeature/z\tdone\n"
+            % (APP, APP)
+        )
+        self.assertEqual(states, {})
+        self.assertEqual(unknown, [])
+
+    # ------------------------------------------------------------- what it draws
+
+    def test_the_glyph_rides_behind_the_blocker(self):
+        pr = self.open_pr("feature/x", signoff="missing")
+        self.assertEqual(
+            emoji_for(pr), EMOJI["mergeable"] + EMOJI["signoff_missing"]
+        )
+
+    def test_the_glyph_rides_behind_a_conversation_too(self):
+        pr = self.open_pr(
+            "feature/x",
+            mergeStateStatus="BLOCKED",
+            reviewDecision="REVIEW_REQUIRED",
+            conversation_block=True,
+            signoff="open",
+        )
+        self.assertEqual(
+            emoji_for(pr),
+            EMOJI["review"] + EMOJI["conversation"] + EMOJI["signoff_open"],
+        )
+
+    def test_a_draft_swallows_the_glyph(self):
+        pr = self.open_pr("feature/x", isDraft=True, signoff="missing")
+        self.assertEqual(emoji_for(pr), EMOJI["draft"])
+
+    def test_an_empty_verdict_keeps_its_emptiness(self):
+        pr = self.open_pr("feature/x", mergeStateStatus="UNKNOWN", signoff="done")
+        self.assertEqual(emoji_for(pr), "")
+
+    def test_a_row_the_hook_left_out_grows_no_glyph(self):
+        prs = [self.open_pr("feature/answered"), self.open_pr("feature/silent")]
+        verdicts = decide(prs, {}, EMOJI, {(APP, "feature/answered"): "done"})
+        self.assertEqual(
+            verdicts[(APP, "feature/answered")],
+            EMOJI["mergeable"] + EMOJI["signoff_done"],
+        )
+        self.assertEqual(verdicts[(APP, "feature/silent")], EMOJI["mergeable"])
+
+    def test_no_hook_at_all_draws_what_it_always_drew(self):
+        prs = [self.open_pr("feature/x")]
+        self.assertEqual(decide(prs, {})[(APP, "feature/x")], EMOJI["mergeable"])
+
+    # ----------------------------------------------------------- how it is read
+
+    def test_no_command_configured(self):
+        self.assertEqual(
+            daemon.read_signoff(os.path.join(FIXTURES, "no-such-config.toml")),
+            ("", daemon.DEFAULT_SIGNOFF_TIMEOUT),
+        )
+
+    def test_the_command_and_its_timeout(self):
+        with tempfile.NamedTemporaryFile("w", suffix=".toml", delete=False) as handle:
+            handle.write(
+                'signoffCommand = "~/bin/pr-signoff"\nsignoffTimeoutSeconds = 5\n'
+            )
+            path = handle.name
+        self.addCleanup(lambda: os.remove(path))
+        command, timeout = daemon.read_signoff(path)
+        self.assertEqual(command, os.path.expanduser("~/bin/pr-signoff"))
+        self.assertEqual(timeout, 5)
+
+    def test_unreadable_values_keep_the_defaults(self):
+        with tempfile.NamedTemporaryFile("w", suffix=".toml", delete=False) as handle:
+            handle.write('signoffCommand = "  "\nsignoffTimeoutSeconds = 0\n')
+            path = handle.name
+        self.addCleanup(lambda: os.remove(path))
+        self.assertEqual(
+            daemon.read_signoff(path), ("", daemon.DEFAULT_SIGNOFF_TIMEOUT)
+        )
+
+    # ---------------------------------------------------------- how it is run
+
+    def test_the_rows_reach_the_command_on_its_stdin(self):
+        hook = self.hook("#!/bin/sh\nsed 's/\t.*//;s|$|\tfeature/x\tdone|'\n")
+        self.assertEqual(
+            daemon.run_signoff(hook, 10, "%s\tfeature/x\t1\t\tCLEAN\n" % APP),
+            {(APP, "feature/x"): "done"},
+        )
+
+    def test_a_command_that_answers_nothing_answers_nothing(self):
+        self.assertEqual(
+            daemon.run_signoff(self.hook("#!/bin/sh\nexit 0\n"), 10, "row\n"), {}
+        )
+
+    def test_a_command_that_fails_costs_its_own_glyph_and_no_more(self):
+        self.assertEqual(
+            daemon.run_signoff(self.hook("#!/bin/sh\nexit 3\n"), 10, "row\n"), {}
+        )
+
+    def test_a_command_nobody_can_run_answers_nothing(self):
+        self.assertEqual(daemon.run_signoff("/no/such/hook", 10, "row\n"), {})
+
+    def test_a_command_that_times_out_answers_nothing(self):
+        with mock.patch.object(
+            daemon, "run", return_value=(124, "", "timed out after 20s")
+        ):
+            self.assertEqual(daemon.run_signoff("/bin/cat", 20, "row\n"), {})
+
+
 class Publishing(unittest.TestCase):
     def test_an_unanswered_branch_is_left_alone(self):
         rows = [
@@ -967,7 +1145,11 @@ class Verdicts(unittest.TestCase):
         self.assertEqual(daemon.verdict_for(pr), ("", False))
 
     def test_every_named_state_has_a_rank_and_nothing_else_does(self):
-        self.assertEqual(sorted(daemon.SORT_ORDER), sorted(EMOJI))
+        # STATE_NAMES is the glyph table without its sign-off states, which
+        # name no blocker: a sort ranks what a pull request itself reports.
+        self.assertEqual(sorted(daemon.SORT_ORDER), sorted(daemon.STATE_NAMES))
+        signoffs = [daemon.SIGNOFF_PREFIX + name for name in daemon.SIGNOFF_STATES]
+        self.assertEqual(sorted(EMOJI), sorted(list(daemon.STATE_NAMES) + signoffs))
 
     def test_states_follow_the_verdicts(self):
         prs, _ = daemon.parse_lookup(fixture("lookup.json")["data"], PAIRS)
