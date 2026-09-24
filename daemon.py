@@ -342,10 +342,12 @@ def required_state(contexts, expected=()):
 def blocker_for(pr, icons=DEFAULT_ICONS):
     """The one thing most worth doing about a pull request. First match wins.
 
-    A branch with no pull request reads ❔. An empty answer is reserved for a
-    row with nothing to say — no branch, or a remote that is not GitHub, both
-    of which `plan_publications` blanks — and for `UNKNOWN`, where GitHub has
-    yet to compute mergeability and the next poll decides.
+    A branch with no pull request reads ❔, unless it is the default branch.
+    An empty answer is reserved for a row with nothing to say — no branch, or
+    a remote that is not GitHub, both of which `plan_publications` blanks, and
+    the default branch with no pull request or a closed one — and for
+    `UNKNOWN`, where GitHub has yet to compute mergeability and the next poll
+    decides.
 
     `reviewDecision` is asked without `mergeStateStatus`: a missing review is a
     fact of its own, and GitHub reports it whether the merge state says
@@ -367,7 +369,8 @@ def blocker_for(pr, icons=DEFAULT_ICONS):
     are green.
     """
     if pr.get("number") is None:
-        return icons["no_pr"]
+        # The trunk is where pull requests go, not where they come from.
+        return "" if pr.get("on_default_branch") else icons["no_pr"]
     if pr.get("state") == "MERGED":
         return icons["merged"]
     if pr.get("state") == "CLOSED":

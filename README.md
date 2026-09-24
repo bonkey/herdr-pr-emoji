@@ -57,7 +57,7 @@ The decisive fields are GitHub's `mergeStateStatus` and `reviewDecision`, plus w
 
 | Condition | Emoji | Nerd Font |
 |---|---|---|
-| no PR for the branch | ❔ | `oct-question` |
+| no PR for the branch, unless the branch is the repository's default | ❔ | `oct-question` |
 | `state == MERGED` | 🟣 | `oct-git_merge` |
 | `state == CLOSED` (closed unmerged), unless the branch is the repository's default | 🚪 | `oct-git_pull_request_closed` |
 | `isDraft` | 📝 | `oct-git_pull_request_draft` |
@@ -73,9 +73,9 @@ The decisive fields are GitHub's `mergeStateStatus` and `reviewDecision`, plus w
 | `mergeStateStatus` in `CLEAN`, `BEHIND`, `HAS_HOOKS` | ✅ | `oct-check_circle_fill` |
 | anything else (`UNKNOWN`, GitHub still computing) | keeps its last glyph, next poll | — |
 
-An empty answer means a row with nothing to say: no branch, a remote that is not GitHub, or a
-closed pull request on the default branch. A branch that simply has no pull request yet reads
-❔.
+An empty answer means a row with nothing to say: no branch, a remote that is not GitHub, or the
+default branch with no pull request or a closed one. Any other branch that simply has no pull
+request yet reads ❔.
 
 An open pull request no row above matched keeps the emoji it already shows instead of losing
 it. `UNKNOWN` is GitHub asking to be asked again: it invalidates mergeability whenever the
@@ -83,10 +83,11 @@ base branch moves and recomputes it only when something requests it, so the very
 reports `UNKNOWN` is what makes the next one exact. A status this plugin does not recognise
 is treated the same way. The TTL of three intervals still expires whatever nobody refreshes.
 
-🚪 is suppressed on the default branch. `pullRequests(headRefName:, last: 1)` keeps finding
-whatever pull request last carried the trunk's name — a release sync closed months ago, say —
-so a door there would never go away. Only the door is suppressed: a pull request open *from*
-the trunk is real work and reads like any other.
+❔ and 🚪 are suppressed on the default branch. The trunk is where pull requests go, so a ❔
+there would ask a question nobody means to answer. `pullRequests(headRefName:, last: 1)`
+keeps finding whatever pull request last carried the trunk's name — a release sync closed
+months ago, say — so a door there would never go away. Only these two are suppressed: a pull
+request open *from* the trunk is real work and reads like any other.
 
 Running checks are reported before 👀 and `BLOCKED`: while required checks run GitHub already
 says `BLOCKED`, and a 🛑 during every CI run is exactly the noise this plugin removes. Chasing
@@ -345,8 +346,8 @@ request to speak of, then what is finished. Inside one state the name decides.
 | then | 📝 ❔ | not up for merging yet |
 | last | 🟣 🚪 | done |
 
-A row that shows nothing — no branch, a remote that is not GitHub, a closed pull request on
-the trunk, or a branch GitHub has yet to answer for — goes after all of those.
+A row that shows nothing — no branch, a remote that is not GitHub, the trunk with no pull
+request or a closed one, or a branch GitHub has yet to answer for — goes after all of those.
 `bonkey.pr-emoji.sort-name` orders the same groups by name alone, case folded.
 
 The parent of a group keeps the top of its group, and two worktrees the key cannot tell apart

@@ -115,6 +115,12 @@ class EmojiPrecedence(unittest.TestCase):
         # Not empty: an empty answer means a row with nothing to say at all.
         self.assertEqual(emoji_for({"number": None}), "❔")
 
+    def test_no_pull_request_on_the_default_branch_stays_quiet(self):
+        # The trunk is not up for merging, so it has nothing to ask.
+        self.assertEqual(
+            emoji_for({"number": None, "on_default_branch": True}), ""
+        )
+
     def test_merged_beats_everything(self):
         self.assertEqual(
             emoji_for(
@@ -876,6 +882,13 @@ class Lookup(unittest.TestCase):
                 "state": "CLOSED",
                 "on_default_branch": True,
             }
+        ]
+        self.assertEqual(decide(prs, {}), {(APP, "main"): ""})
+
+    def test_the_trunk_with_no_pull_request_is_still_cleared(self):
+        # Empty replaces the ❔ it showed before, rather than leaving it.
+        prs = [
+            {"slug": APP, "branch": "main", "number": None, "on_default_branch": True}
         ]
         self.assertEqual(decide(prs, {}), {(APP, "main"): ""})
 
